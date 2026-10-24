@@ -15,7 +15,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.block.state.BlockState;
@@ -218,7 +218,7 @@ final class RemixRenderContext implements RenderContext {
             int capturedColorIndex = materialVal != null && materialVal.disableColorIndex()
                     ? -1 : colorIndexVal;
 
-            ResourceLocation spriteId = null;
+            Identifier spriteId = null;
             float su0 = 0, sv0 = 0, su1 = 1, sv1 = 1;
             if (bakedSprite != null) {
                 spriteId = bakedSprite.contents().name();
