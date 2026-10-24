@@ -118,7 +118,7 @@ under `mods\`, `resourcepacks\`, and `saves\`.
    into the instance's `saves\` folder, so that `saves\` holds the
    `NVIDIA RTX Demo` folder.
 4. Optionally give the instance the JVM arguments the installer would set:
-   a 2 GB heap with G1GC, listed as `RECOMMENDED_JVM_ARGS` in
+   a fixed 16 GB heap with G1GC, listed as `RECOMMENDED_JVM_ARGS` in
    [`packaging/installer.ps1`](../packaging/installer.ps1).
 
 Upgrade, Repair, and Uninstall do not know about a manual install. To update,
