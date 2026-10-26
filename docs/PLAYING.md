@@ -22,7 +22,7 @@ This is a beta. The mod began as a technology showcase and was tuned against
 one showcase world, built for this project by
 [BlockWorks](https://www.blockworks.uk/), so the places that world visits are
 where it looks and runs best. It ships with
-[known issues](https://github.com/NVIDIAGameWorks/rtx-remix-minecraft/issues),
+[known issues](https://github.com/kazumasa200/rtx-remix-minecraft-26-3/issues),
 and there are bugs yet to be found. Two things to know before a long session:
 
 - **Other mods.** It has had limited testing alongside other mods, and mods
@@ -38,7 +38,7 @@ fixed.
 
 Download the installer bundle, `rtx-remix-renderer-<version>-installer.zip`,
 from the
-[Releases page](https://github.com/NVIDIAGameWorks/rtx-remix-minecraft/releases/latest)
+[Releases page](https://github.com/kazumasa200/rtx-remix-minecraft-26-3/releases/latest)
 and extract it. It holds the mod, the RTX Remix Materials texture pack, the
 RTX Remix Showcase World, and the installer that sets them up. The release
 also lists the mod, the pack, and the world as separate files, for
@@ -103,7 +103,7 @@ Microsoft account.
 
 If you already run a Fabric instance for Minecraft 26.3 in a launcher of
 your choice, you can install by hand from the separate files on the
-[Releases page](https://github.com/NVIDIAGameWorks/rtx-remix-minecraft/releases/latest).
+[Releases page](https://github.com/kazumasa200/rtx-remix-minecraft-26-3/releases/latest).
 The instance needs Java 25, Fabric Loader 0.19.5 or newer, and Fabric API
 0.165.0+26.3 or newer. The installer bundle holds the same three files,
 under `mods\`, `resourcepacks\`, and `saves\`.
@@ -247,7 +247,7 @@ Paste either path into the File Explorer address bar to open the folder.
 ## Reporting a Bug
 
 Open an issue on the project's
-[issue tracker](https://github.com/NVIDIAGameWorks/rtx-remix-minecraft/issues)
+[issue tracker](https://github.com/kazumasa200/rtx-remix-minecraft-26-3/issues)
 for anything about the mod: what
 is in the world and how it looks, the settings screen, `/rtx` commands and
 keys, lighting profiles, the installer, and crashes. Denoiser, DLSS, or
