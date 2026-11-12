@@ -36,6 +36,7 @@
         "GlyphAtlasTextureMixin",
         "GrassColorsMixin",
         "HeldItemRendererMixin",
+        "IndigoMeshMixin",
         "ItemLayerRenderStateMixin",
         "ItemModelResolverMixin",
         "ItemStackRenderStateAccessor",

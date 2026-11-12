@@ -46,7 +46,9 @@ public final class NativeBridgeSmokeTest {
             int result = RemixBridge.initialize(new File(args[1]).getAbsolutePath());
             BridgeContractTest.check(result == ErrorCode.SUCCESS,
                     "Runtime initialization failed: " + ErrorCode.toString(result));
-            System.out.println("PASS: pinned runtime loaded and accepted Remix API 0.16.0 from Java 8");
+            System.out.println("PASS: pinned runtime loaded and accepted Remix API "
+                    + RemixAPI.VERSION_MAJOR + "." + RemixAPI.VERSION_MINOR + "." + RemixAPI.VERSION_PATCH
+                    + " from Java 8");
             // No Startup or renderer resources exist; the short-lived process owns DLL cleanup.
         }
     }

@@ -25,3 +25,15 @@ a9c38cdc9ba1883ef294ac6815e3665880aa91e9fc10cc081a87ce622dc13e12  rtx-remix/mods
 
 # Unreleased
 278dab8e812a08ce34557e84299d281c833e7a31a17b32ce96be9dace4f3868a  rtx-remix/mods/minecraft-logic/README.md
+
+# Minecraft 26.3 fork v0.2.0 (2f8019e)
+84e1fbb75824d2c931eb2101dce12b090e999c5999662953e9beab58502735d9  rtx-remix/mods/minecraft-logic/README.md
+
+# Minecraft 26.3 fork v0.2.1 (7fe35d9)
+170f6603eaf7af5bbb3012b6e3775a4142eba359b1fbc83ef36ddecccd81d265  rtx-remix/mods/minecraft-logic/README.md
+26e10e8c953dc3c0a526a65bde9c43448d53339d69f0e89751310c6f01ebf417  rtx-remix/mods/minecraft-logic/confs/view_distance_lod.conf
+b4e58e0121ddf074851d0b3d71e16aff3881e4a505d2d407478b27fdd343a720  rtx-remix/mods/minecraft-logic/confs/weather/rain.conf
+77e2b4803084ac7abdec2e2c9fbda69ad1a78b9ff6792a2c10eac97dd3e5369d  rtx-remix/mods/minecraft-logic/confs/weather/thunder.conf
+
+# Current Minecraft 26.3 payload (0bd7b8b)
+6d7d21af5389ee0695f9a28a4532eeee51c292030371e39d899a37564bcdf0f7  rtx-remix/mods/minecraft-logic/README.md

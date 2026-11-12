@@ -23,6 +23,7 @@ constexpr GLenum DRAW_FRAMEBUFFER_BINDING = 0x8CA6;
 constexpr GLenum COLOR_ATTACHMENT0 = 0x8CE0;
 constexpr GLenum FRAMEBUFFER_COMPLETE = 0x8CD5;
 constexpr GLenum FRAMEBUFFER_SRGB = 0x8DB9;
+constexpr GLenum DEDICATED_MEMORY_OBJECT = 0x9581;
 constexpr GLenum HANDLE_OPAQUE_WIN32 = 0x9587;
 constexpr GLenum LAYOUT_GENERAL = 0x958D;
 constexpr GLenum SEMAPHORE_TYPE = 0x95B3;
@@ -54,6 +55,7 @@ void checkGl(const char* operation) {
 struct GlFunctions {
     void (APIENTRY* createMemory)(GLsizei, GLuint*) = loadProc<decltype(createMemory)>("glCreateMemoryObjectsEXT");
     void (APIENTRY* deleteMemory)(GLsizei, const GLuint*) = loadProc<decltype(deleteMemory)>("glDeleteMemoryObjectsEXT");
+    void (APIENTRY* memoryParameter)(GLuint, GLenum, const GLint*) = loadProc<decltype(memoryParameter)>("glMemoryObjectParameterivEXT");
     void (APIENTRY* importMemory)(GLuint, UInt64, GLenum, void*) = loadProc<decltype(importMemory)>("glImportMemoryWin32HandleEXT");
     void (APIENTRY* textureStorage)(GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLuint, UInt64) = loadProc<decltype(textureStorage)>("glTexStorageMem2DEXT");
     void (APIENTRY* createSemaphores)(GLsizei, GLuint*) = loadProc<decltype(createSemaphores)>("glCreateSemaphoresNV");
@@ -148,6 +150,10 @@ struct InteropState {
         if (imageHandle) glFinish();
         deleteImage();
         gl.createMemory(1, &memory);
+        // Remix exports dedicated image allocations; mark them before import.
+        const GLint dedicated = GL_TRUE;
+        gl.memoryParameter(memory, DEDICATED_MEMORY_OBJECT, &dedicated);
+        checkGl("color dedicated memory parameter");
         gl.importMemory(memory, size, HANDLE_OPAQUE_WIN32, reinterpret_cast<void*>(handle));
         checkGl("color memory import");
         glGenTextures(1, &texture);
@@ -183,6 +189,9 @@ struct InteropState {
         if (depthTexture) glFinish();
         deleteDepth();
         gl.createMemory(1, &depthMemory);
+        const GLint dedicated = GL_TRUE;
+        gl.memoryParameter(depthMemory, DEDICATED_MEMORY_OBJECT, &dedicated);
+        checkGl("depth dedicated memory parameter");
         gl.importMemory(depthMemory, size, HANDLE_OPAQUE_WIN32, reinterpret_cast<void*>(handle));
         checkGl("depth memory import");
         glGenTextures(1, &depthTexture);

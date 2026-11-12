@@ -23,7 +23,9 @@ separate runtime dependency. Outputs under `bridge/build/` are
 The default command needs no runtime or GPU. It checks Java/C API constants and
 buffer layouts, compiles the native implementation against `javac -h` headers,
 and loads the DLL to exercise JNI allocation and missing-context guards under
-Java 8. `-RuntimeDirectory` also checks runtime API negotiation.
+Java 8. `-RuntimeDirectory` also checks runtime API negotiation against the
+shared header, currently C API 0.16.1. While the API major is zero, the runtime
+requires the same minor version; the patch version is not compared.
 
 `-GpuSmoke` uses the pinned runtime and a nonactivating offscreen WGL window. It
 renders a known emissive triangle, verifies color and primary depth, resizes the
