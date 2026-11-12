@@ -45,6 +45,14 @@ fails the version check with error code 8, `INCOMPATIBLE_VERSION`. A launch
 without the developer preflight reports `Failed to initialize RTX Remix` in
 `logs/latest.log` and continues with ordinary Minecraft rendering.
 
+The current pin is `minecraft-rtx2-a00da12a-{win64|arm64}-release`, with Remix
+API 0.16.1. Startup uses its native child-window support for Vulkan
+presentation while Minecraft's SDL host window keeps OpenGL and input. This
+separates the two presentation surfaces instead of having Vulkan claim the
+host's OpenGL surface, which can fail with `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`.
+An older 0.16.0 runtime can pass the API minor-version check but does not
+support this startup mode; use the pinned package.
+
 Gradle fetches the pinned runtime through the bootstrap in `packman/` whenever
 the selected `remix-runtime/<arch>/` directory is absent. A fresh clone needs no
 SDK setup command: run `gradlew.bat build` or `test`, or `tools\rtx.bat launch`,

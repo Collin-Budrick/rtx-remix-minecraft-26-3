@@ -33,9 +33,13 @@ public final class GlInterop {
 
     private final InteropImage colorImage = new InteropImage(true);
     private final InteropImage depthImage = new InteropImage(false);
+    private final long dxvkDoneSemaphoreHandle;
+    private final long clientDoneSemaphoreHandle;
     private int vkDoneSemaphore;
     private int clientDoneSemaphore;
     private long clientDoneSemaphoreValue;
+    private long lastWaitedVkDoneSemaphoreValue = -1;
+    private int sourceFbo;
     private int[] barrierTextures = new int[0];
     private int[] barrierLayouts = new int[0];
 
@@ -44,10 +48,12 @@ public final class GlInterop {
                 || interopInfo.clientDoneSemaphore_Handle == 0) {
             throw new IllegalArgumentException("Remix interop semaphore handles must be nonzero");
         }
+        dxvkDoneSemaphoreHandle = interopInfo.dxvkDoneSemaphore_Handle;
+        clientDoneSemaphoreHandle = interopInfo.clientDoneSemaphore_Handle;
         vkDoneSemaphore = importVulkanSemaphore(
-                interopInfo.dxvkDoneSemaphore_Handle, "dxvkDoneSemaphore_Handle");
+                dxvkDoneSemaphoreHandle, "dxvkDoneSemaphore_Handle");
         clientDoneSemaphore = importVulkanSemaphore(
-                interopInfo.clientDoneSemaphore_Handle, "clientDoneSemaphore_Handle");
+                clientDoneSemaphoreHandle, "clientDoneSemaphore_Handle");
     }
 
     private int importVulkanSemaphore(long win32Handle, String debugName) {
@@ -71,6 +77,7 @@ public final class GlInterop {
     }
 
     public boolean recreateImagesIf(InteropInfo info) {
+        validateSemaphoreHandles(info);
         boolean recreated = colorImage.recreate(
                 info.imageMemory_Handle,
                 info.allocationSize,
@@ -89,11 +96,22 @@ public final class GlInterop {
                 "depth");
         if (recreated) {
             rebuildBarrierArrays();
+            lastWaitedVkDoneSemaphoreValue = -1;
         }
         return recreated;
     }
 
     public void waitForVk(InteropInfo info) {
+        validateSemaphoreHandles(info);
+        if (info.dxvkDoneSemaphore_ValueToWait == lastWaitedVkDoneSemaphoreValue) {
+            return;
+        }
+        if (info.dxvkDoneSemaphore_ValueToWait < lastWaitedVkDoneSemaphoreValue) {
+            throw new IllegalStateException(
+                    "Vulkan-done semaphore value moved backwards on the same semaphore: "
+                            + info.dxvkDoneSemaphore_ValueToWait + " after "
+                            + lastWaitedVkDoneSemaphoreValue);
+        }
         drainStaleGlErrors();
         int result = RemixBridge.openglSemaphoreParameterui64vEXT(
                 vkDoneSemaphore,
@@ -106,6 +124,15 @@ public final class GlInterop {
         glWaitSemaphoreEXT(
                 vkDoneSemaphore, NO_BUFFERS, barrierTextures, barrierLayouts);
         checkGlError("glWaitSemaphoreEXT");
+        lastWaitedVkDoneSemaphoreValue = info.dxvkDoneSemaphore_ValueToWait;
+    }
+
+    private void validateSemaphoreHandles(InteropInfo info) {
+        if (info.dxvkDoneSemaphore_Handle != dxvkDoneSemaphoreHandle
+                || info.clientDoneSemaphore_Handle != clientDoneSemaphoreHandle) {
+            throw new IllegalStateException(
+                    "Remix replaced an interop semaphore during an active session");
+        }
     }
 
     public void signalDone() {
@@ -125,6 +152,26 @@ public final class GlInterop {
     }
 
     public void copyFromFramebuffer(int sourceFbo) {
+        copyFromFramebuffer(sourceFbo, colorImage.width, colorImage.height);
+    }
+
+    /** Copies a retained GL target without reading the occluded host window. */
+    public void copyFromTexture(int texture, int width, int height) {
+        drainStaleGlErrors();
+        if (!colorImage.available()) {
+            return;
+        }
+        if (sourceFbo == 0) {
+            sourceFbo = glCreateFramebuffers();
+            glNamedFramebufferReadBuffer(sourceFbo, GL_COLOR_ATTACHMENT0);
+        }
+        // Reattach on every frame: resizing may reuse a deleted texture's name.
+        glNamedFramebufferTexture(sourceFbo, GL_COLOR_ATTACHMENT0, texture, 0);
+        checkGlError("glNamedFramebufferTexture(presentation source)");
+        copyFromFramebuffer(sourceFbo, width, height);
+    }
+
+    private void copyFromFramebuffer(int sourceFbo, int width, int height) {
         drainStaleGlErrors();
         if (!colorImage.available()) {
             return;
@@ -135,8 +182,8 @@ public final class GlInterop {
                 destinationFbo,
                 0,
                 0,
-                colorImage.width,
-                colorImage.height,
+                width,
+                height,
                 0,
                 0,
                 colorImage.width,
@@ -167,6 +214,10 @@ public final class GlInterop {
     }
 
     public void destroy() {
+        if (sourceFbo != 0) {
+            glDeleteFramebuffers(sourceFbo);
+            sourceFbo = 0;
+        }
         colorImage.destroy();
         depthImage.destroy();
         if (vkDoneSemaphore != 0) {
@@ -179,6 +230,7 @@ public final class GlInterop {
         }
         barrierTextures = new int[0];
         barrierLayouts = new int[0];
+        lastWaitedVkDoneSemaphoreValue = -1;
         LOGGER.info("GlInterop: destroyed");
     }
 

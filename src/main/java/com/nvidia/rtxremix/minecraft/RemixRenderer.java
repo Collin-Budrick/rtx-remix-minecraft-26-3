@@ -4,7 +4,9 @@
  */
 package com.nvidia.rtxremix.minecraft;
 
+import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.renderpearl.backend.opengl.GlTexture;
 import com.nvidia.rtxremix.CameraInfo;
 import com.nvidia.rtxremix.CameraInfoParameterizedEXT;
 import com.nvidia.rtxremix.CameraType;
@@ -104,6 +106,8 @@ import java.util.concurrent.TimeUnit;
  * OpenGL through {@code EXT_memory_object} and {@code EXT_semaphore}. Minecraft
  * composites its own GL output onto that shared image, and {@link
  * #presentFrameVk()} hands the result back to Remix to put on screen.
+ * Remix presents through its own child HWND while Minecraft keeps its OpenGL
+ * context and input handling on the host window.
  */
 public class RemixRenderer {
 
@@ -317,7 +321,9 @@ public class RemixRenderer {
 
                 StartupInfo startupInfo = StartupInfo.builder()
                     .hwnd(windowHandle)
+                    .forceNoVkSwapchain(false)
                     .interopImage(true)
+                    .useRemixOwnedChildWindow(true)
                     .build();
                 remixApi.startup(startupInfo);
                 LOGGER.info("RTX Remix API started");
@@ -1391,18 +1397,19 @@ public class RemixRenderer {
     public void presentFrameVk() {
         boolean failed = false;
         try {
+            GlInterop interop = requireInterop();
             try (ProfileScope ignored = ProfileScope.begin("Interop.GLToVK")) {
-                blitGlToRemix();
+                blitGlToRemix(interop);
             } catch (RuntimeException e) {
                 failed = true;
                 logPresentFailureOnce("Error copying GL frame to Remix", e);
             }
             PresentInfo presentInfo = new PresentInfo();
-            presentInfo.hwndOverride = windowHandle;
+            presentInfo.hwndOverride = 0;
             presentInfo.skipVulkanSwapchain = 0;
             presentInfo.interopFlipY = 1;
             presentInfo.clientDoneSemaphore_ValueToWait =
-                    interopGlVk.getClientDoneSemaphoreValue();
+                    interop.getClientDoneSemaphoreValue();
             presentInfo.disableCpuWaitForExternalSemaphores = 0;
             try (ProfileScope ignored = ProfileScope.begin("Remix.Present")) {
                 remixApi.present(presentInfo);
@@ -1444,7 +1451,14 @@ public class RemixRenderer {
         }
     }
 
-    private void blitGlToRemix() {
+    private GlInterop requireInterop() {
+        if (interopGlVk == null) {
+            throw new IllegalStateException("Initialized renderer has no GL/Vulkan interop");
+        }
+        return interopGlVk;
+    }
+
+    private void blitGlToRemix(GlInterop interop) {
         if (!submitFrameCalled) {
             // if there was no submitFrame, then interop image might not be allocated yet
             // we must have a image to blit into (e.g. UI if there's no world)
@@ -1453,13 +1467,22 @@ public class RemixRenderer {
 
         // must be called after Submit(), which allocates the image
         InteropInfo interopInfo = remixApi.dxvkGetInteropInfo();
-        interopGlVk.recreateImagesIf(interopInfo);
+        interop.recreateImagesIf(interopInfo);
 
-        int srcFbo = 0; // 0 is a default framebuffer
-        interopGlVk.copyFromFramebuffer(srcFbo);
+        // Menus also submit a frame. The world overlay may have already waited
+        // for this same Vulkan-done value before drawing its GL effects and HUD.
+        interop.waitForVk(interopInfo);
+
+        // The child covers the host window, whose default framebuffer pixels
+        // are undefined there. The main target retains the completed frame.
+        RenderTarget mainTarget = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+        if (!(mainTarget.getColorTexture() instanceof GlTexture color)) {
+            throw new IllegalStateException("Remix presentation requires an OpenGL main target");
+        }
+        interop.copyFromTexture(color.glId(), mainTarget.width, mainTarget.height);
 
         // signal that GL is done copying, so VK can read the image and present
-        interopGlVk.signalDone();
+        interop.signalDone();
     }
 
     public int getInteropDepthTexture() {

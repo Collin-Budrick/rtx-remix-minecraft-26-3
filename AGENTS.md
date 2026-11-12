@@ -648,9 +648,11 @@ RTX Remix C API. It must never import `net.minecraft` or `net.fabricmc`;
 `RemixJavaBoundaryTest.shimSourcesDoNotImportMinecraftOrFabric` enforces this
 boundary across `rtxremix-java/src/`. Keep game-state capture and Fabric
 integration in the mod, not in the shim. Wrapper and affected mod callers
-change in the same pull request. This fork has not changed the wrapper since
-the upstream import; its features reuse the existing batched
-`updateTextureFromMemory`, config-variable and config-layer entry points.
+change in the same pull request. The wrapper targets Remix API 0.16.1 and
+forwards `StartupInfo.useRemixOwnedChildWindow` to the runtime pinned at
+`a00da12a`. Vulkan presents through a Remix-owned child window while
+Minecraft's SDL host window retains OpenGL and input. Batched texture updates,
+config variables, and config layers retain their existing entry points.
 
 The wrapper's source of truth, in order, is:
 
