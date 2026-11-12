@@ -6,6 +6,7 @@ package com.nvidia.rtxremix.minecraft.texture;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.JarURLConnection;
@@ -47,7 +48,7 @@ class PbrAtlasFilterTest {
         int checked = 0;
         for (var urls = getClass().getClassLoader().getResources(prefix); urls.hasMoreElements(); ) {
             if (!(urls.nextElement().openConnection() instanceof JarURLConnection jar)) continue;
-            try (JarFile file = new JarFile(jar.getJarFileURL().getPath())) {
+            try (JarFile file = new JarFile(new File(jar.getJarFileURL().toURI()))) {
                 for (var entries = file.entries(); entries.hasMoreElements(); ) {
                     String name = entries.nextElement().getName();
                     if (!name.startsWith(prefix) || !name.endsWith(".png")) continue;
