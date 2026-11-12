@@ -39,6 +39,7 @@ public final class GlInterop {
     private int clientDoneSemaphore;
     private long clientDoneSemaphoreValue;
     private long lastWaitedVkDoneSemaphoreValue = -1;
+    private int sourceFbo;
     private int[] barrierTextures = new int[0];
     private int[] barrierLayouts = new int[0];
 
@@ -151,6 +152,26 @@ public final class GlInterop {
     }
 
     public void copyFromFramebuffer(int sourceFbo) {
+        copyFromFramebuffer(sourceFbo, colorImage.width, colorImage.height);
+    }
+
+    /** Copies a retained GL target without reading the occluded host window. */
+    public void copyFromTexture(int texture, int width, int height) {
+        drainStaleGlErrors();
+        if (!colorImage.available()) {
+            return;
+        }
+        if (sourceFbo == 0) {
+            sourceFbo = glCreateFramebuffers();
+            glNamedFramebufferReadBuffer(sourceFbo, GL_COLOR_ATTACHMENT0);
+        }
+        // Reattach on every frame: resizing may reuse a deleted texture's name.
+        glNamedFramebufferTexture(sourceFbo, GL_COLOR_ATTACHMENT0, texture, 0);
+        checkGlError("glNamedFramebufferTexture(presentation source)");
+        copyFromFramebuffer(sourceFbo, width, height);
+    }
+
+    private void copyFromFramebuffer(int sourceFbo, int width, int height) {
         drainStaleGlErrors();
         if (!colorImage.available()) {
             return;
@@ -161,8 +182,8 @@ public final class GlInterop {
                 destinationFbo,
                 0,
                 0,
-                colorImage.width,
-                colorImage.height,
+                width,
+                height,
                 0,
                 0,
                 colorImage.width,
@@ -193,6 +214,10 @@ public final class GlInterop {
     }
 
     public void destroy() {
+        if (sourceFbo != 0) {
+            glDeleteFramebuffers(sourceFbo);
+            sourceFbo = 0;
+        }
         colorImage.destroy();
         depthImage.destroy();
         if (vkDoneSemaphore != 0) {

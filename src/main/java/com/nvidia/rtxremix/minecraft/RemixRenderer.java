@@ -4,7 +4,9 @@
  */
 package com.nvidia.rtxremix.minecraft;
 
+import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.renderpearl.backend.opengl.GlTexture;
 import com.nvidia.rtxremix.CameraInfo;
 import com.nvidia.rtxremix.CameraInfoParameterizedEXT;
 import com.nvidia.rtxremix.CameraType;
@@ -104,7 +106,7 @@ import java.util.concurrent.TimeUnit;
  * OpenGL through {@code EXT_memory_object} and {@code EXT_semaphore}. Minecraft
  * composites its own GL output onto that shared image, and {@link
  * #presentFrameVk()} hands the result back to Remix to put on screen.
- * Remix owns a child HWND for Vulkan presentation, leaving Minecraft's OpenGL
+ * Remix presents through its own child HWND while Minecraft keeps its OpenGL
  * context and input handling on the host window.
  */
 public class RemixRenderer {
@@ -1515,14 +1517,17 @@ public class RemixRenderer {
         InteropInfo interopInfo = remixApi.dxvkGetInteropInfo();
         interop.recreateImagesIf(interopInfo);
 
-        // Every Submit hands the shared image from Vulkan to GL. The world
-        // overlay path may already have acquired this same timeline value.
+        // Menus also submit a frame. The world overlay may have already waited
+        // for this same Vulkan-done value before drawing its GL effects and HUD.
         interop.waitForVk(interopInfo);
 
-        // The child window covers the host window, so the default framebuffer's
-        // covered pixels are undefined. Minecraft's main framebuffer contains
-        // the same completed world, overlays, and HUD without that dependency.
-        interop.copyFromFramebuffer(Minecraft.getInstance().getMainRenderTarget().frameBufferId);
+        // The child covers the host window, whose default framebuffer pixels
+        // are undefined there. The main target retains the completed frame.
+        RenderTarget mainTarget = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+        if (!(mainTarget.getColorTexture() instanceof GlTexture color)) {
+            throw new IllegalStateException("Remix presentation requires an OpenGL main target");
+        }
+        interop.copyFromTexture(color.glId(), mainTarget.width, mainTarget.height);
 
         // signal that GL is done copying, so VK can read the image and present
         interop.signalDone();
