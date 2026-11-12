@@ -199,6 +199,7 @@ To add either by hand, take `RTX-Remix-Materials-<version>.zip` or
 | Record a camera flythrough | [Camera Paths](docs/CAMERA_PATHS.md) |
 | Install, repair, or uninstall in detail | [packaging/INSTALL.md](packaging/INSTALL.md) |
 | Build and run from source | [Getting Started](docs/GETTING_STARTED.md) |
+| Rebuild and deploy to a Modrinth profile | [Modrinth Development](docs/MODRINTH_DEVELOPMENT.md) |
 | Tune the developer knobs behind the renderer | [Tuning](docs/TUNING.md) |
 | Diagnose a rendering or native integration problem | [Rendering Diagnostics](docs/RENDERING_DIAGNOSTICS.md) |
 | Contribute a change | [CONTRIBUTING.md](CONTRIBUTING.md) |

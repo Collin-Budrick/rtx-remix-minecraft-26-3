@@ -61,6 +61,12 @@ reuses its normal account profile; portable Prism keeps its profile under
 owns Minecraft: Java Edition. See
 [Getting Started](docs/GETTING_STARTED.md#sign-in-to-prism).
 
+For development in an existing Modrinth profile, use the root `dev.ps1` helper
+and [Modrinth Development](docs/MODRINTH_DEVELOPMENT.md). It builds, tests,
+packages, or deploys a lightweight JAR with verified backups; launch the profile
+through Modrinth after deployment. Machine-local logs and backups stay under
+ignored `.codex/`.
+
 `classes` depends on `setupRuntime`, which compiles the JNI bridge, fetches a
 missing runtime, and stages it along with `rtx.conf`, the Packman runtime
 textures and the `rtx-remix/` conf payload, and migrates `run/` resource packs.
