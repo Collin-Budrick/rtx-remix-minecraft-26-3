@@ -86,9 +86,29 @@ def active() -> ClientLauncher:
     global _active
     if _active is None:
         # Imported here because the launcher module imports this one.
-        from .prism_launcher import PrismLauncher
+        from .config import load_config
 
-        _active = PrismLauncher()
+        config = load_config()
+        name = str((config.get("launch") or {}).get("launcher") or "prism").lower()
+        if name == "modrinth":
+            from .modrinth_launcher import ModrinthLauncher
+
+            _active = ModrinthLauncher()
+        elif name == "prism":
+            from .prism_launcher import PrismLauncher
+
+            launcher = PrismLauncher(config=config)
+            try:
+                launcher.refresh_layout()
+            finally:
+                # Reuse this selection read once, then keep subsequent calls
+                # responsive to machine-local config changes as before.
+                launcher.config = None
+            _active = launcher
+            util.RUN_DIR = launcher.game_dir
+            return launcher
+        else:
+            raise LaunchBlocked(f"Unknown launch.launcher {name!r}; expected prism or modrinth.")
     refresh_layout = getattr(_active, "refresh_layout", None)
     if refresh_layout is not None:
         refresh_layout()

@@ -22,12 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, cast
 
-from .. import client
+from .. import client, renderer_lab
 from .. import config as tools_config
 from .. import sdk as runtime_sdk
 from . import catalog, gitmeta, gpu_telemetry, machine, tracy, util
 
 PROCESS_HANDLES: dict[int, tuple[IO[str], ...]] = {}
+OWNED_PROCESSES: dict[int, client.GameProcess] = {}
 BENCHMARK_SAVE_NAME = "rtx-benchmark"
 BENCHMARK_STATUS_FILE = "benchmark_status.json"
 BENCHMARK_RTX_CONFIG_PREFIX = "benchmark-rtx-"
@@ -36,6 +37,7 @@ ASYNC_COMPILATION_ENV = "RTX_ENABLE_ASYNC_COMPILATION"
 BENCHMARK_BLOCKING_OPTIONS = {
     "rtx.initializer.asyncShaderFinalizing",
     "rtx.shader.enableAsyncCompilation",
+    "rtx.dlfg.enable",
 }
 BENCHMARK_RTX_CONFIG = """\
 # Temporary runner-owned overrides for measured benchmark processes only.
@@ -654,7 +656,7 @@ def resolve_art_pack(
     leave the failure fatal so their results stay comparable."""
     rp = configured_resource_pack(config)
     mode = str(rp.get("mode") or "none").strip().lower()
-    if mode == "none":
+    if mode in {"none", "current"}:
         return None
     stage_name = art_pack_stage_name(config)
     if mode == "local":
@@ -1102,7 +1104,7 @@ def rtx_conf_values(path: Path, keys: set[str]) -> dict[str, str]:
 
 
 def validate_benchmark_user_conf() -> None:
-    """Reject saved User opinions that would mask benchmark blocking values."""
+    """Reject saved User opinions masking blocking compilation or frame-generation-off settings."""
     user_conf = util.RUN_DIR / "user.conf"
     values = rtx_conf_values(user_conf, BENCHMARK_BLOCKING_OPTIONS)
     conflicts = {key: value for key, value in values.items() if value.casefold() not in {"false", "0"}}
@@ -1120,8 +1122,31 @@ def benchmark_rtx_config_env() -> Iterator[dict[str, str]]:
 
     DXVK_RTX_CONFIG_FILE replaces the default rtx.conf lookup, so the game
     directory's rtx.conf must be listed first. The temporary file is listed
-    second and therefore wins only for its two shader-compilation keys.
+    second and therefore wins for compilation and frame-generation settings.
     """
+    if getattr(client.active(), "startup_config_in_profile", False):
+        # The Modrinth singleton cannot inherit per-request environment variables.
+        # Only its explicitly adopted duplicate may reach this branch.
+        client.active().check(interactive=False)
+        validate_benchmark_user_conf()
+        target = util.RUN_DIR / "rtx.conf"
+        original = target.read_bytes()
+        backup = util.RUN_DIR / "benchmark" / "startup-rtx.conf.backup"
+        if backup.exists():
+            raise RuntimeError(f"An interrupted benchmark has a config backup at {backup}; restore it first.")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        with backup.open("xb") as stream:
+            stream.write(original)
+        staged = original + b"\n" + BENCHMARK_RTX_CONFIG.encode("utf-8")
+        target.write_bytes(staged)
+        try:
+            yield gradle_env()
+        finally:
+            if target.read_bytes() != staged:
+                raise RuntimeError(f"Benchmark rtx.conf changed unexpectedly; original retained at {backup}.")
+            target.write_bytes(original)
+            backup.unlink()
+        return
     benchmark_dir = util.RUN_DIR / "benchmark"
     benchmark_dir.mkdir(parents=True, exist_ok=True)
     temporary = tempfile.NamedTemporaryFile(
@@ -1926,6 +1951,9 @@ def benchmark_run_plan(args) -> dict[str, Any]:
     if getattr(args, "strip_entities", False):
         config["stripEntitiesOnStage"] = True
     runs = getattr(args, "runs", 0) or (int(config.get("runs") or 3) if ci else 1)
+    if renderer_lab.enabled(config):
+        runs = getattr(args, "runs", 0) or 3
+        renderer_lab.apply_protocol(config, runs)
     arch = host_arch()
     sdk_variant = getattr(args, "sdk_variant", "release")
     sdk = sdk_probe(sdk_variant, arch)
@@ -2270,6 +2298,8 @@ def discover_world_resource_packs(selection: BenchmarkSelection | None) -> dict[
 
 
 def resolve_resource_pack_files(config: dict, selection: BenchmarkSelection | None) -> list[str]:
+    if configured_resource_pack(config).get("mode") == "current":
+        return renderer_lab.current_resource_packs(util.RUN_DIR)
     available = {name: source.file_name for name, source in discover_world_resource_packs(selection).items()}
 
     names = configured_resource_pack_names(config)
@@ -2347,6 +2377,8 @@ def stage_resource_packs(
     run_dir: Path,
     art_pack: ResourcePackSource | None = None,
 ) -> list[str]:
+    if configured_resource_pack(config).get("mode") == "current":
+        return renderer_lab.current_resource_packs(run_dir)
     root = run_dir / RESOURCEPACKS_DIR_NAME
     root.mkdir(parents=True, exist_ok=True)
 
@@ -2864,12 +2896,19 @@ def find_checkout_java_processes(
     the game outside the checkout, so its resolved instance is an additional
     exact ownership path.
     """
+    if game_dir is not None and game_dir.name != ".minecraft":
+        # Modrinth profiles are siblings under one common parent. A classpath
+        # reference or a profile-name prefix does not establish game ownership.
+        from ..modrinth_launcher import matching_games
+
+        return matching_games(game_dir, processes)
     root = str(project_dir or util.PROJECT_DIR).lower().replace("/", "\\").rstrip("\\")
     owned = re.compile(re.escape(root) + r"\\(?:" + "|".join(map(re.escape, CHECKOUT_CLIENT_DIRS)) + r")\\")
+    instance_root = game_dir.parent if game_dir is not None and game_dir.name == ".minecraft" else game_dir
     instance = (
         None
-        if game_dir is None
-        else re.compile(re.escape(str(game_dir.parent).lower().replace("/", "\\").rstrip("\\")) + r"\\")
+        if instance_root is None
+        else re.compile(re.escape(str(instance_root).lower().replace("/", "\\").rstrip("\\")) + r'(?:\\|"|\s|$)')
     )
     matches = []
     for pid, command_line in processes:
@@ -3094,6 +3133,7 @@ def started_client(request: client.LaunchRequest) -> Iterator[client.GameProcess
     a Prism still open after its game, on every path.
     """
     proc = client.active().start(request)
+    OWNED_PROCESSES[id(proc)] = proc
     try:
         yield proc
     except BaseException:
@@ -3104,6 +3144,8 @@ def started_client(request: client.LaunchRequest) -> Iterator[client.GameProcess
             proc.wait(timeout=CLIENT_EXIT_WAIT_SECONDS)
         except subprocess.TimeoutExpired:
             print(f"WARNING: the game client did not exit within {CLIENT_EXIT_WAIT_SECONDS}s.")
+        if proc.poll() is not None:
+            OWNED_PROCESSES.pop(id(proc), None)
 
 
 def run_gradle_build(arch: str, ci: bool) -> None:
@@ -3155,13 +3197,6 @@ def terminate_process(proc: client.GameProcess, label: str, *, timeout: int = 20
     if proc.poll() is not None:
         return
     print(f"Terminating {label}...")
-    if os.name == "nt":
-        run_taskkill("/pid", str(proc.pid), "/t", "/f")
-        try:
-            proc.wait(timeout=timeout)
-            return
-        except subprocess.TimeoutExpired:
-            print(f"{label} did not exit after taskkill; killing the root process.")
     proc.terminate()
     try:
         proc.wait(timeout=timeout)
@@ -3831,6 +3866,7 @@ def start_tracy_capture(tools: dict | None, output: Path, timeout_seconds: int) 
         creationflags=creation_flags(),
     )
     remember_process_handles(proc, out_handle, err_handle)
+    OWNED_PROCESSES[id(proc)] = proc
     return proc
 
 
@@ -3847,6 +3883,7 @@ def stop_tracy_capture(proc: subprocess.Popen | None, timeout_seconds: int = 30)
         except subprocess.TimeoutExpired:
             proc.kill()
     close_process_handles(proc)
+    OWNED_PROCESSES.pop(id(proc), None)
     time.sleep(2)
 
 
@@ -3958,11 +3995,11 @@ def collect_windows_crash_dumps(
 
 
 def kill_leftovers() -> None:
-    # Do not terminate WerFault.exe here. It may still be writing the dump that
-    # explains why a just-finished Java process exited.
-    images = ["capture.exe", "javaw.exe", "java.exe"]
-    for image in images:
-        run_taskkill("/f", "/im", image)
+    """End only processes launched and retained by this controller invocation."""
+    for identity, process in list(OWNED_PROCESSES.items()):
+        terminate_process(process, f"owned benchmark process {process.pid}")
+        if process.poll() is not None:
+            OWNED_PROCESSES.pop(identity, None)
 
 
 def wait_before_next_run(config: dict, completed_run: int, next_run: int) -> None:
@@ -3981,6 +4018,8 @@ def run_client_once(
     exit_on_complete: bool,
     arch: str,
 ) -> dict:
+    if getattr(client.active(), "startup_config_in_profile", False):
+        client.active().check(interactive=False)
     bench_results = util.RUN_DIR / "benchmark" / "results"
     bench_results.mkdir(parents=True, exist_ok=True)
     bench_screenshots = util.RUN_DIR / "benchmark" / "screenshots"
@@ -3992,6 +4031,8 @@ def run_client_once(
     for old in bench_screenshots.glob("*.png"):
         old.unlink(missing_ok=True)
 
+    if renderer_lab.enabled(config):
+        renderer_lab.verify_fixture(config, selection, util.RUN_DIR)
     install_fixtures(config, selection, pin_display=True)
     write_auto_trigger(config, selection, exit_on_complete=exit_on_complete)
 
@@ -4558,6 +4599,8 @@ def write_manifest(
         "notes": notes,
         "tags": tags,
     }
+    if lab := renderer_lab.evidence(config):
+        manifest["rendererLab"] = lab
     util.write_json(result_dir / "manifest.json", manifest)
     return manifest
 
@@ -4605,6 +4648,10 @@ def run_benchmark(args) -> Path | None:
     if getattr(args, "strip_entities", False):
         config["stripEntitiesOnStage"] = True
     runs = args.runs or (int(config.get("runs") or 3) if args.ci else 1)
+    if renderer_lab.enabled(config):
+        runs = args.runs or 3
+        renderer_lab.apply_protocol(config, runs)
+        config["_rendererLabFixture"] = renderer_lab.verify_fixture(config, selection, util.RUN_DIR)
     arch = host_arch(getattr(args, "arch", None))
     verify_jvm_matches_arch(arch)
     started = dt.datetime.now().astimezone()
@@ -4660,6 +4707,13 @@ def run_benchmark(args) -> Path | None:
                         continue
                     break
                 validate_benchmark_display(config, per_run / "benchmark.json")
+                if renderer_lab.enabled(config):
+                    proof = renderer_lab.backend_proof(
+                        read_text_retry(run_log),
+                        renderer_lab.requested_backend(config),
+                        benchmark=util.read_json(per_run / "benchmark.json"),
+                    )
+                    config.setdefault("_rendererLabProofs", []).append(proof)
                 degenerate = degenerate_frame_report(per_run / "benchmark.json")
                 if degenerate:
                     details = {

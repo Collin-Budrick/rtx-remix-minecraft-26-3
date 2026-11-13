@@ -283,6 +283,9 @@ class PrismLauncher:
             *configured_jvm_args,
             *client.preset_jvm_args(request.preset),
         ]
+        from . import renderer_lab
+
+        jvm_args += renderer_lab.jvm_args(config)
         if request.jfr_path is not None:
             depth = request.tracy_java_max_depth
             jvm_args += client.benchmark_jvm_args(

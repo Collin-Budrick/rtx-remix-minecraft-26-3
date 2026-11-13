@@ -67,8 +67,8 @@ when the JVM exits (or you can dump on-demand with `jcmd <pid> JFR.dump`).
 
 ### Manual Capture Beside Another Client
 
-The benchmark harness kills Java and Tracy capture processes machine-wide.
-To profile an interactive client without that cleanup, stage a suitable runtime
+The benchmark harness terminates only its own retained game and Tracy capture
+processes. To profile an existing interactive client, stage a suitable runtime
 and assets first, then use separate Command Prompt terminals from the repository
 root. Fetch the pinned Tracy capture/export tools without launching a client:
 

@@ -25,6 +25,10 @@ public abstract class GlSurfaceMixin {
     private void rtxremix$presentThroughRemix(CallbackInfo ci) {
         RemixRenderer renderer = RtxRemixMod.renderer;
         if (renderer != null && renderer.isInitialized()) {
+            if (renderer.isNativeHostActive()) {
+                renderer.finishNativeFrame();
+                return;
+            }
             renderer.presentFrameVk();
             ci.cancel();
         }

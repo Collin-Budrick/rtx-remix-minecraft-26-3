@@ -16,6 +16,8 @@ import java.nio.ByteBuffer;
  * the vtable uses internal locking, JNI native methods are reentrant.
  */
 public final class RemixBridge {
+    /** Direct LE records: instance, mesh, flags, double-sided, twelve transform floats. */
+    public static native long sceneInstanceUpdateBatch(ByteBuffer records, int count);
 
     private RemixBridge() {}
 

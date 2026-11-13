@@ -290,6 +290,7 @@ public final class RtxSettingsFactory {
                 .ifPresent(list::add);
 
         // --- Tonemapping ---
+        if (!remix.isVirtualScene()) {
         list.add(floatSetting("post.exposure", SettingGroup.TONEMAPPING,
                 "rtxremix.setting.post.exposure", 0.0, 2.0,
                 postProcessing::getExposure, postProcessing::setExposure));
@@ -307,6 +308,7 @@ public final class RtxSettingsFactory {
         list.add(floatSetting("post.highLightAdaptation", SettingGroup.EYE_ADAPTATION,
                 "rtxremix.setting.post.highLightAdaptation", -5.0, 10.0,
                 postProcessing::getHighLightAdaptation, postProcessing::setHighLightAdaptation));
+        }
 
         // --- Lens ---
         list.add(relativeFloat("lens.depthOfFieldScale", SettingGroup.LENS,

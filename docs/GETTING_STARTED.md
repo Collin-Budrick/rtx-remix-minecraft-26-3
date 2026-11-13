@@ -3,15 +3,21 @@
 How to build and run the mod from source. If you only want to play, read
 [Playing](PLAYING.md) instead.
 
+For edits tested through an existing Modrinth profile, start with
+[Modrinth Development](MODRINTH_DEVELOPMENT.md). Automated renderer experiments
+use a separate, explicitly adopted `RTX Rewrite Bench` duplicate; see
+[Modrinth Renderer Lab](../tools/docs/MODRINTH_RENDERER_LAB.md). The unchanged
+tools configuration retains the upstream Prism workflow described below.
+
 ## Prerequisites
 
 - **Windows 10 or 11**, on x64 or ARM64. The JNI bridge is compiled with MSVC,
   so there is no Linux or macOS build.
 - **Java 25**, a JDK matching your machine's architecture. Eclipse Adoptium is
   a good choice. Set `JAVA_HOME` to that JDK: the native build reads it to find
-  `jni.h`. Prism runs Minecraft 26.3 only on Java 25, not a newer version,
-  so the developer tools launch the game on `JAVA_HOME` when it is a JDK 25
-  and otherwise look for one in Gradle's toolchains and in the Eclipse
+  `jni.h`. The Prism adapter runs Minecraft 26.3 only on Java 25, not a newer
+  version, so it launches the game on `JAVA_HOME` when it is a JDK 25
+  and otherwise looks for one in Gradle's toolchains and in the Eclipse
   Adoptium, Microsoft, and Java folders under Program Files.
 - **Visual Studio 2022 Build Tools** with the Desktop development with C++
   workload (MSVC v143). Cross-building the ARM64 bridge additionally needs the
@@ -25,8 +31,10 @@ How to build and run the mod from source. If you only want to play, read
   downloads Python 3.15 when no such Python is installed, so that first
   command needs network access.
 - **An NVIDIA RTX GPU**, 30-series or newer, to run what you build.
-- **Prism Launcher 9.0 or newer, signed in to a Microsoft account that owns
-  Minecraft: Java Edition**, to launch what you build. Install it from
+- **A launcher signed in to an account that owns Minecraft: Java Edition.**
+  Modrinth users select Java 25 in the profile itself; the automated adapter
+  verifies the launched JVM and uses an isolated duplicate. For the upstream
+  default, use **Prism Launcher 9.0 or newer**. Install it from
   [prismlauncher.org](https://prismlauncher.org); the developer tools never
   download it. [Sign In To Prism](#sign-in-to-prism) covers
   the sign-in.
@@ -153,9 +161,22 @@ variant in the launcher cannot add instrumentation to a local release build.
 
 ## Checklist
 
+Clone the repository, then choose the launch workflow:
+
 ```powershell
 git clone https://github.com/kazumasa200/rtx-remix-minecraft-26-3.git
 cd rtx-remix-minecraft-26-3
+```
+
+For Modrinth, follow [Modrinth Development](MODRINTH_DEVELOPMENT.md) for the
+close/deploy/Play loop, or [Modrinth Renderer Lab](../tools/docs/MODRINTH_RENDERER_LAB.md)
+for isolated automation. The latter requires app-created duplicate metadata,
+separate source/target UUIDs, explicit adoption and persistent JVM arguments.
+It never launches or stages into the source gameplay profile.
+
+For the unchanged Prism default:
+
+```powershell
 .\tools\rtx.bat prism signin
 .\tools\rtx.bat launch
 ```
@@ -171,7 +192,7 @@ by `tools\rtx.bat textures water-normals`. The build automatically fetches
 The Java wrapper and JNI bridge are tracked under `rtxremix-java/` and arrive
 with the clone; no recursive checkout or hook setup is needed.
 
-`tools\rtx.bat launch` fetches a missing runtime and builds the mod and bridge
+The default Prism `tools\rtx.bat launch` fetches a missing runtime and builds the mod and bridge
 with Gradle. It installs the mod, the pinned Fabric API, the runtime,
 `rtx.conf`, the gameplay conf payload, and the runtime textures into this
 checkout's Prism instance, then starts Minecraft at the main menu through
@@ -182,16 +203,25 @@ and it needs no separate build or install step. `tools\rtx.bat` with no
 arguments opens the [developer dashboard](../tools/docs/LAUNCHER.md) instead,
 which launches into the pinned demo world.
 
-Each launch writes the enabled resource packs in the game directory's
+The default workflow writes the enabled resource packs in the game directory's
 `options.txt`: vanilla, then Fabric's `fabric` pack with the built-in baseline,
 then any world packs and the selected art pack. It removes an old generated
 `rtx-remix` baseline pack, which it recognizes by its metadata and texture
 inventory, leaving other packs alone.
 
+The Modrinth adapter instead targets only its adopted duplicate, which must
+already have Minecraft 26.3, Fabric and Fabric API installed. Renderer-lab runs
+retain that duplicate's current resource-pack order and verify frozen content
+hashes. The singleton app receives an instance/world deep link, so shell
+environment changes and `launch.jvmArgs` cannot be assumed to reach its JVM:
+copy the arguments printed by `tools\rtx.bat modrinth jvm-args` into the
+duplicate's own Java settings. No database records or account tokens are written.
+
 ### Sign In To Prism
 
-The developer tools launch Minecraft only through Prism Launcher, signed in to
-a Microsoft account that owns Minecraft: Java Edition. They look for
+The default Prism adapter launches with a signed-in Microsoft account that owns
+Minecraft: Java Edition. This section applies when `launch.launcher` is `prism`
+or omitted. It looks for
 `prismlauncher.exe` in this order: `prism.executable` in ignored
 `tools/config.local.json`, the copy the release installer manages under
 `%LOCALAPPDATA%\RtxRemixMinecraft\PrismLauncher`, `prismlauncher` on `PATH`,
@@ -283,7 +313,8 @@ runtime and the C++ toolchain just as `tools\rtx.bat launch` does.
 `setupRuntime` also syncs a full copy of the runtime, PDBs included, with the
 bridge, `rtx.conf`, the gameplay conf payload, and the runtime textures into
 `run/`, the game directory of Gradle's `runClient` task, so every build
-refreshes it. The developer tools' Prism launches use `run-prism\` instead.
+refreshes it. The Prism adapter uses its resolved instance instead; the Modrinth
+adapter uses its adopted duplicate. Neither adapter uses Gradle's `run/` saves.
 
 `build` produces a lightweight JAR that is not installable on its own.
 `package` embeds the runtime, `rtx.conf`, the gameplay conf payload, and the
@@ -368,9 +399,12 @@ prerequisite described in [Get A Runtime](#get-a-runtime).
 
 | Goal | Use | Minecraft directory |
 |---|---|---|
-| Iterate on this repository | `tools\rtx.bat launch`, or `tools\rtx.bat` for the developer dashboard, through this checkout's Prism instance | Installed Prism's profile, or `run-prism\instances\rtx-remix-dev\.minecraft` for portable Prism |
+| Iterate through an existing Modrinth profile | `dev.ps1`, then Play in Modrinth; see [Modrinth Development](MODRINTH_DEVELOPMENT.md) | Explicit existing profile; the helper verifies and backs up replaced mod files |
+| Automate isolated Modrinth experiments | Select `launch.launcher=modrinth`, adopt a separate `RTX Rewrite Bench`, then use `tools\rtx.bat`; see [Modrinth Renderer Lab](../tools/docs/MODRINTH_RENDERER_LAB.md) | App metadata selects the adopted duplicate; source gameplay profile is excluded |
+| Use the upstream Prism default | `tools\rtx.bat launch`, or `tools\rtx.bat` for the developer dashboard | Installed Prism's checkout-specific instance, or `run-prism\instances\rtx-remix-dev\.minecraft` for portable Prism |
 | Produce an artifact | `gradlew build`, `gradlew package`, or `gradlew releaseArchive` | None |
 | Test inside an existing Microsoft Launcher install | `tools\rtx.bat install` after `gradlew build` | `%APPDATA%\.minecraft`, or `--game-dir DIR` |
+| Build/render native SDK diagnostics | [Renderer Experiments](../native/renderer-experiments/README.md) | Separate ScenePacket replay; not an integrated Minecraft benchmark |
 
 `build.gradle` also keeps `runClient`, Fabric's standard Gradle task. It runs
 from the repository-local `run/` directory, not the Prism instance, so the two
@@ -412,14 +446,18 @@ when the staged runtime was built with Tracy support, because the zones are
 submitted through the runtime's own profiler.
 
 `tools\rtx.bat run` records each benchmark run with JFR, Java phases on.
-For an interactive client, put the recording arguments in `launch.jvmArgs`, as
+For an interactive Prism client, put the recording arguments in `launch.jvmArgs`, as
 [Profiling](../tools/docs/PROFILING.md#manual-capture-beside-another-client)
 shows. The individual switches, and the rest of the JVM system properties the
 mod reads, are in [Tuning](TUNING.md).
 
+For automated Modrinth recording, set the required arguments persistently in
+the adopted duplicate's app settings. The adapter audits the newly launched
+JVM's exact arguments; it does not inject them through a running singleton.
+
 ## Viewing A Remix Debug View
 
-`tools\rtx.bat launch` starts Prism with the shell's environment, and Prism
+With the Prism adapter, `tools\rtx.bat launch` starts Prism with the shell's environment, and Prism
 passes it on to the game. Set a debug-view override there instead of editing
 `rtx.conf` in the game directory, which every launch replaces, or saving a User
 Setting through Alt+X:
@@ -430,6 +468,11 @@ $env:DXVK_RTX_DEBUG_VIEW_INDEX = 51
 # Clear the override before the next normal launch.
 Remove-Item Env:DXVK_RTX_DEBUG_VIEW_INDEX
 ```
+
+This environment forwarding is specific to Prism. Configure startup overrides
+through Modrinth's profile/app settings for a Modrinth launch, then verify the
+actual game state. A running Modrinth app does not inherit the command shell's
+new environment.
 
 The runtime reads the override at startup, so changing it needs a relaunch.
 The authority for the numbers is `DEBUG_VIEW_*` in the matching dxvk-remix
@@ -454,9 +497,8 @@ triage; confirm the indices against the runtime you are actually testing.
 
 ## Trying A Runtime Option
 
-The runtime reads `dxvk.conf` from the process working directory, which for
-`tools\rtx.bat launch` is the checkout-specific Prism instance's game
-directory. Put dxvk-level options such as
+The runtime reads `dxvk.conf` from the process working directory: the selected
+Prism instance or adopted Modrinth duplicate's game directory. Put dxvk-level options such as
 `d3d9.*` swapchain settings or `dxvk.enableAftermath` there without rebuilding.
 It is the lowest config layer: built-in application defaults and `rtx.conf`
 outrank it. An `rtx.*` key already authored in `rtx.conf` can therefore appear
@@ -477,6 +519,10 @@ inspect its loaded modules or the `nvngx_dlss.dll`, `nvngx_dlssd.dll`,
 announcement in `latest.log`.
 
 ## Working In A Worktree
+
+An adopted Modrinth benchmark duplicate belongs to one checkout through its
+ownership marker. Create/adopt a separate duplicate for another worktree;
+never reuse the source gameplay profile or copy account/database records.
 
 A new `git worktree add` checkout includes the integrated Java and JNI sources,
 but not its ignored runtime directories, saves, or options. Installed Prism
@@ -506,6 +552,8 @@ removes its stale registration.
 | A launch reports that Prism Launcher is not installed | Install it from [prismlauncher.org](https://prismlauncher.org), or point `prism.executable` in `tools/config.local.json` at its `prismlauncher.exe` |
 | A launch opens Prism and stops with sign-in steps | No Microsoft account that owns Minecraft is signed in to the selected Prism profile, or `prism.account` names another. See [Sign In To Prism](#sign-in-to-prism) |
 | A launch reports that Prism is already running | Close the selected Prism window and launch again |
+| A Modrinth launch requires adoption or refuses the source profile | Create a separate `RTX Rewrite Bench` in the app and configure/adopt its identity; see [Modrinth Renderer Lab](../tools/docs/MODRINTH_RENDERER_LAB.md) |
+| The new Modrinth JVM is missing required arguments | Copy `modrinth jvm-args` output into the duplicate's Java settings; a running singleton cannot inherit per-request JVM arguments |
 | A launch reports that Minecraft 26.3 in Prism needs a 64-bit JDK 25 | `JAVA_HOME` names another Java version or architecture, and no JDK 25 for this machine is installed where the tools look. Install one and set `JAVA_HOME` to it |
 | A JVM option set in `JAVA_TOOL_OPTIONS` has no effect | Prism does not pass it to the game. Use `launch.jvmArgs`; see [JVM Arguments](TUNING.md#jvm-arguments) |
 | `Failed to initialize RTX Remix` with error code 8, and the game renders vanilla | The staged runtime predates the API in `rtxremix-java/native/include/remix_c.h`. Stage one of the runtimes listed in [Get A Runtime](#get-a-runtime) |

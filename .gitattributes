@@ -12,3 +12,7 @@
 # The release zips carry these texts byte for byte, so every checkout, on any
 # platform or autocrlf setting, builds the same zip.
 packaging/content/**/*.txt text eol=lf
+
+# Imported SDK notices and JSON source retain their original bytes.
+native/renderer-lab/licenses/** -text -whitespace
+native/renderer-lab/third_party/** -text -whitespace
