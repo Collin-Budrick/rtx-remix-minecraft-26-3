@@ -88,11 +88,13 @@ public class InstanceInfoBlendEXT {
                 srcAlphaBlendFactor, dstAlphaBlendFactor, alphaBlendOp,
                 writeMask, isVertexColorBakedLighting != 0,
                 chainNext);
+        if (ScenePacketExtensions.enabled()) ScenePacketExtensions.blend(nativePtr, this, chainNext);
         return nativePtr;
     }
 
     public void freeNative() {
         if (nativePtr != 0) {
+            if (ScenePacketExtensions.enabled()) ScenePacketExtensions.forget(nativePtr);
             RemixBridge.freeExt(nativePtr);
             nativePtr = 0;
         }

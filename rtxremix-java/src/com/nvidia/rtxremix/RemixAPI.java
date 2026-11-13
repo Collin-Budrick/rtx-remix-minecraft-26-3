@@ -28,6 +28,47 @@ public class RemixAPI {
     public static final int VERSION_MINOR = 16;
     public static final int VERSION_PATCH = 1;
 
+    private ScenePacketRecorder sceneCapture;
+    private final boolean virtualScene;
+    private final SceneInstanceUpdateBatch instanceUpdates;
+    private long nextVirtualHandle = 1;
+    private final java.util.Map<Long, String> virtualResources = new java.util.HashMap<Long, String>();
+    private final java.util.Map<String, String> virtualConfig = new java.util.HashMap<String, String>();
+    private final java.util.Set<String> unappliedNativeFeatures = new java.util.TreeSet<String>();
+
+    /** Must run before an operation that can observe, invalidate, or depend on queued instances. */
+    public void flushSceneInstanceUpdates() {
+        if (instanceUpdates == null) return;
+        try { instanceUpdates.flush(); }
+        catch (RuntimeException failure) {
+            if (sceneCapture != null) sceneCapture.failed(failure);
+            throw failure;
+        }
+    }
+
+    public boolean isSceneInstanceBatchEnabled() { return instanceUpdates != null; }
+    public long sceneInstanceBatchNativeCalls() { return instanceUpdates != null ? instanceUpdates.nativeCalls() : 0; }
+    public long sceneInstanceBatchQueuedUpdates() { return instanceUpdates != null ? instanceUpdates.queuedUpdates() : 0; }
+    public long sceneInstanceBatchCoalescedUpdates() { return instanceUpdates != null ? instanceUpdates.coalescedUpdates() : 0; }
+
+    /** Enables an owned scene mirror. Capture is instrumentation, not another renderer. */
+    public void enableSceneCapture(ScenePacketRecorder recorder) {
+        if (recorder == null || sceneCapture != null) throw new IllegalStateException("Scene capture already set or missing");
+        sceneCapture = recorder;
+    }
+
+    public ScenePacketRecorder getSceneCapture() { return sceneCapture; }
+
+    public void setSceneCaptureViewport(int width, int height) {
+        if (sceneCapture != null) sceneCapture.viewport(width, height);
+    }
+
+    private void observe(java.util.function.Consumer<ScenePacketRecorder> operation) {
+        if (sceneCapture == null || sceneCapture.failure() != null) return;
+        try { operation.accept(sceneCapture); }
+        catch (RuntimeException failure) { sceneCapture.failed(failure); }
+    }
+
     /**
      * Fits every value except long hash lists, so most reads through
      * {@link #getConfigVariableResolved(String)} take one call.
@@ -53,7 +94,42 @@ public class RemixAPI {
     public static final int COPY_OUTPUT_OBJECT_PICKING  = 3;
     public static final int COPY_OUTPUT_GUI             = 4;
 
-    private RemixAPI() {}
+    private RemixAPI() { this(false); }
+
+    private RemixAPI(boolean virtualScene) {
+        this.virtualScene = virtualScene;
+        instanceUpdates = !virtualScene && Boolean.getBoolean("rtxremix.instanceBatch")
+                ? new SceneInstanceUpdateBatch(RemixBridge::sceneInstanceUpdateBatch,
+                        Integer.getInteger("rtxremix.instanceBatch.capacity", 1024)) : null;
+        virtualConfig.put("rtx.showUI", "0");
+    }
+
+    /** Binds allocation helpers only; never loads, initializes, or starts the Remix renderer. */
+    public static RemixAPI virtualScene(String bridgeBesideRemixDll) {
+        bindBridge(bridgeBesideRemixDll);
+        RemixAPI api = new RemixAPI(true);
+        api.sceneCapture = new ScenePacketRecorder();
+        api.initialized = true;
+        return api;
+    }
+
+    public boolean isVirtualScene() { return virtualScene; }
+
+    public java.util.Set<String> unappliedNativeFeatures() {
+        return new java.util.TreeSet<String>(unappliedNativeFeatures);
+    }
+
+    private long virtualResource(String kind) {
+        long handle = nextVirtualHandle++;
+        virtualResources.put(handle, kind);
+        return handle;
+    }
+
+    private void requireVirtualResource(long handle, String kind) {
+        if (!kind.equals(virtualResources.get(handle))) {
+            throw new IllegalArgumentException("Native scene has no live " + kind + " handle " + handle);
+        }
+    }
 
     public static long makeVersion(int major, int minor, int patch) {
         return ((long) major << 48) | ((long) minor << 16) | (long) patch;
@@ -159,6 +235,7 @@ public class RemixAPI {
 
     public void startup(StartupInfo info) {
         checkInitialized();
+        if (virtualScene) throw new UnsupportedOperationException("A virtual scene has no Remix startup or swapchain");
         int result = RemixBridge.startup(
             info.hwnd,
                 info.disableSrgbConversionForOutput,
@@ -175,24 +252,37 @@ public class RemixAPI {
 
     public void shutdown() {
         if (!initialized) return;
+        if (virtualScene) {
+            initialized = false;
+            sceneCapture.close();
+            virtualResources.clear();
+            return;
+        }
         markNativeRuntimeUnavailable();
         try {
-            RemixBridge.shutdown();
+            try { flushSceneInstanceUpdates(); }
+            finally { RemixBridge.shutdown(); }
         } finally {
             initialized = false;
+            if (sceneCapture != null) sceneCapture.close();
         }
     }
 
     public void submit(SubmitInfo info) {
         checkInitialized();
+        if (virtualScene) { sceneCapture.frameSubmitted(); return; }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.submit(info != null ? info.interopFlags : 0);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("Submit failed", result);
     }
+        if (sceneCapture != null) observe(capture -> capture.frameSubmitted());
     }
 
     public void present(PresentInfo info) {
         checkInitialized();
+        if (virtualScene) throw new UnsupportedOperationException("Native scene presentation belongs to Minecraft OpenGL");
+        flushSceneInstanceUpdates();
         int result = RemixBridge.present(
             info != null ? info.hwndOverride : 0,
             info != null ? info.skipVulkanSwapchain : 0,
@@ -229,6 +319,12 @@ public class RemixAPI {
 
     public long createMaterial(MaterialInfo info) {
         checkInitialized();
+        if (virtualScene) {
+            long handle = virtualResource("material");
+            sceneCapture.material(handle, info);
+            return handle;
+        }
+        flushSceneInstanceUpdates();
         long pNext = allocMaterialPNext(info);
         try {
             long handle = RemixBridge.createMaterial(
@@ -245,6 +341,7 @@ public class RemixAPI {
             if (handle == 0) {
                 throw new RemixException("CreateMaterial failed", ErrorCode.GENERAL_FAILURE);
             }
+            if (sceneCapture != null) observe(capture -> capture.material(handle, info));
             return handle;
         } finally {
             if (pNext != 0) RemixBridge.freeExt(pNext);
@@ -253,6 +350,12 @@ public class RemixAPI {
 
     public void updateMaterial(long handle, MaterialInfo info) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(handle, "material");
+            sceneCapture.material(handle, info);
+            return;
+        }
+        flushSceneInstanceUpdates();
         long pNext = allocMaterialPNext(info);
         try {
             int result = RemixBridge.updateMaterial(
@@ -269,6 +372,7 @@ public class RemixAPI {
             if (result != ErrorCode.SUCCESS) {
                 throw new RemixException("UpdateMaterial failed", result);
             }
+            if (sceneCapture != null) observe(capture -> capture.material(handle, info));
         } finally {
             if (pNext != 0) RemixBridge.freeExt(pNext);
         }
@@ -323,16 +427,28 @@ public class RemixAPI {
 
     public void destroyMaterial(long handle) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(handle, "material");
+            sceneCapture.removeMaterial(handle); virtualResources.remove(handle); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.destroyMaterial(handle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("DestroyMaterial failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.removeMaterial(handle));
     }
 
     // ─── textures ────────────────────────────────────────────────────────
 
     public long createTextureFromMemory(TextureFromMemoryInfo info) {
         checkInitialized();
+        if (virtualScene) {
+            long handle = virtualResource("texture");
+            sceneCapture.texture(handle, info);
+            return handle;
+        }
+        flushSceneInstanceUpdates();
         long handle = RemixBridge.createTextureFromMemory(
                 info.hash, info.pixelData,
                 info.width, info.height, info.format, info.purpose);
@@ -340,29 +456,45 @@ public class RemixAPI {
             throw new RemixException("CreateTextureFromMemory failed",
                     ErrorCode.GENERAL_FAILURE);
         }
+        if (sceneCapture != null) observe(capture -> capture.texture(handle, info));
         return handle;
     }
 
     public long createTextureFromFile(String filePath) {
         checkInitialized();
+        if (virtualScene) {
+            long handle = virtualResource("texture");
+            sceneCapture.textureFile(handle, new java.io.File(filePath).getAbsolutePath());
+            return handle;
+        }
+        flushSceneInstanceUpdates();
         long handle = RemixBridge.createTextureFromFile(filePath);
         if (handle == 0) {
             throw new RemixException("CreateTextureFromFile failed for: " + filePath,
                     ErrorCode.GENERAL_FAILURE);
         }
+        if (sceneCapture != null) observe(capture -> capture.textureFile(handle, filePath));
         return handle;
     }
 
     public void destroyTexture(long handle) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(handle, "texture");
+            sceneCapture.removeTexture(handle); virtualResources.remove(handle); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.destroyTexture(handle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("DestroyTexture failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.removeTexture(handle));
     }
 
     public void updateTextureFromMemory(TexturePatchInfo info) {
         checkInitialized();
+        if (virtualScene) { sceneCapture.texturePatches(info); return; }
+        flushSceneInstanceUpdates();
         if (info == null || info.entries == null || info.entries.length == 0) {
             return;
         }
@@ -424,12 +556,19 @@ public class RemixAPI {
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("UpdateTextureFromMemory failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.texturePatches(info));
     }
 
     // ─── meshes ──────────────────────────────────────────────────────────
 
     public long createMesh(MeshInfo info) {
         checkInitialized();
+        if (virtualScene) {
+            long handle = virtualResource("mesh");
+            sceneCapture.mesh(handle, info);
+            return handle;
+        }
+        flushSceneInstanceUpdates();
         int n = info.surfaces != null ? info.surfaces.length : 0;
         if (n == 0) {
             throw new RemixException("CreateMesh: no surfaces", ErrorCode.INVALID_ARGUMENTS);
@@ -467,21 +606,30 @@ public class RemixAPI {
         if (handle == 0) {
             throw new RemixException("CreateMesh failed", ErrorCode.GENERAL_FAILURE);
         }
+        if (sceneCapture != null) observe(capture -> capture.mesh(handle, info));
         return handle;
     }
 
     public void destroyMesh(long handle) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(handle, "mesh");
+            sceneCapture.removeMesh(handle); virtualResources.remove(handle); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.destroyMesh(handle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("DestroyMesh failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.removeMesh(handle));
     }
 
     // ─── camera ──────────────────────────────────────────────────────────
 
     public void setupCamera(CameraInfo info) {
         checkInitialized();
+        if (virtualScene) { sceneCapture.camera(info); return; }
+        flushSceneInstanceUpdates();
         long pNext = 0;
         if (info.parameterizedExt != null) {
             CameraInfoParameterizedEXT p = info.parameterizedExt;
@@ -497,6 +645,7 @@ public class RemixAPI {
             if (result != ErrorCode.SUCCESS) {
                 throw new RemixException("SetupCamera failed", result);
             }
+            if (sceneCapture != null) observe(capture -> capture.camera(info));
         } finally {
             if (pNext != 0) RemixBridge.freeExt(pNext);
         }
@@ -504,6 +653,11 @@ public class RemixAPI {
 
     public void setCameraMediumMaterial(long materialHandle) {
         checkInitialized();
+        if (virtualScene) {
+            if (materialHandle != 0) unappliedNativeFeatures.add("camera-water-medium");
+            return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.setCameraMediumMaterial(materialHandle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("SetCameraMediumMaterial failed", result);
@@ -524,22 +678,36 @@ public class RemixAPI {
     public void drawInstance(long meshHandle, float[] transform,
                              int categoryFlags, int doubleSided, long pNext) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(meshHandle, "mesh");
+            sceneCapture.transientInstance(meshHandle, transform, categoryFlags, doubleSided, pNext); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.drawInstance(meshHandle, transform,
                 categoryFlags, doubleSided, pNext);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("DrawInstance failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.transientInstance(meshHandle, transform, categoryFlags, doubleSided, pNext));
     }
 
     /** Adds an instance that remains in the scene until explicitly removed. */
     public long sceneInstanceAdd(long meshHandle, float[] transform,
                                  int categoryFlags, int doubleSided, long pNext) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(meshHandle, "mesh");
+            long handle = virtualResource("instance");
+            sceneCapture.instance(handle, meshHandle, transform, categoryFlags, doubleSided, pNext);
+            return handle;
+        }
+        flushSceneInstanceUpdates();
         long handle = RemixBridge.sceneInstanceAdd(meshHandle, transform,
                 categoryFlags, doubleSided, pNext);
         if (handle == 0) {
             throw new RemixException("SceneInstanceAdd failed", ErrorCode.GENERAL_FAILURE);
         }
+        if (sceneCapture != null) observe(capture -> capture.instance(handle, meshHandle, transform, categoryFlags, doubleSided, pNext));
         return handle;
     }
 
@@ -548,20 +716,39 @@ public class RemixAPI {
                                     long meshHandle, float[] transform,
                                     int categoryFlags, int doubleSided, long pNext) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(sceneInstanceHandle, "instance");
+            requireVirtualResource(meshHandle, "mesh");
+            sceneCapture.instance(sceneInstanceHandle, meshHandle, transform, categoryFlags, doubleSided, pNext); return;
+        }
+        if (instanceUpdates != null && pNext == 0) {
+            instanceUpdates.enqueue(sceneInstanceHandle, meshHandle, categoryFlags, doubleSided, transform);
+            if (sceneCapture != null) observe(capture -> capture.instance(sceneInstanceHandle, meshHandle,
+                    transform, categoryFlags, doubleSided, 0));
+            return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.sceneInstanceUpdate(sceneInstanceHandle,
                 meshHandle, transform, categoryFlags, doubleSided, pNext);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("SceneInstanceUpdate failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.instance(sceneInstanceHandle, meshHandle, transform, categoryFlags, doubleSided, pNext));
     }
 
     /** Removes a retained instance from the scene. */
     public void sceneInstanceRemove(long sceneInstanceHandle) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(sceneInstanceHandle, "instance");
+            sceneCapture.removeInstance(sceneInstanceHandle); virtualResources.remove(sceneInstanceHandle); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.sceneInstanceRemove(sceneInstanceHandle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("SceneInstanceRemove failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.removeInstance(sceneInstanceHandle));
     }
 
     /**
@@ -579,6 +766,7 @@ public class RemixAPI {
                 bonePNext = RemixBridge.allocBoneTransformsExt(
                         info.boneTransformsExt.transformData,
                         info.boneTransformsExt.count, pNext);
+                if (sceneCapture != null) ScenePacketExtensions.bones(bonePNext, info.boneTransformsExt.transformData, info.boneTransformsExt.count, pNext);
                 pNext = bonePNext;
             }
             if (info.gpuInstancingExt != null
@@ -587,6 +775,7 @@ public class RemixAPI {
                 gpuPNext = RemixBridge.allocGpuInstancingExt(
                         info.gpuInstancingExt.transformData,
                         info.gpuInstancingExt.count, pNext);
+                if (sceneCapture != null) ScenePacketExtensions.gpu(gpuPNext, info.gpuInstancingExt.transformData, info.gpuInstancingExt.count, pNext);
                 pNext = gpuPNext;
             }
             if (info.blendExt != null) {
@@ -596,6 +785,9 @@ public class RemixAPI {
             drawInstance(info.mesh, info.transform.matrix,
                     info.categoryFlags, info.doubleSided, pNext);
         } finally {
+            if (sceneCapture != null) ScenePacketExtensions.forget(blendPNext);
+            if (sceneCapture != null) ScenePacketExtensions.forget(gpuPNext);
+            if (sceneCapture != null) ScenePacketExtensions.forget(bonePNext);
             if (blendPNext != 0) RemixBridge.freeExt(blendPNext);
             if (gpuPNext != 0) RemixBridge.freeExt(gpuPNext);
             if (bonePNext != 0) RemixBridge.freeExt(bonePNext);
@@ -615,9 +807,11 @@ public class RemixAPI {
         checkInitialized();
 
         long gpuPNext = RemixBridge.allocGpuInstancingExt(transforms, instanceCount, pNext);
+        if (sceneCapture != null) ScenePacketExtensions.gpu(gpuPNext, transforms, instanceCount, pNext);
         try {
             drawInstance(meshHandle, IDENTITY_TRANSFORM, categoryFlags, doubleSided, gpuPNext);
         } finally {
+            if (sceneCapture != null) ScenePacketExtensions.forget(gpuPNext);
             RemixBridge.freeExt(gpuPNext);
         }
     }
@@ -626,6 +820,12 @@ public class RemixAPI {
 
     public long createLight(LightInfo info) {
         checkInitialized();
+        if (virtualScene) {
+            long handle = virtualResource("light");
+            sceneCapture.light(handle, info);
+            return handle;
+        }
+        flushSceneInstanceUpdates();
         long pNext = allocLightPNext(info);
         try {
             long handle = RemixBridge.createLight(info.hash,
@@ -633,6 +833,7 @@ public class RemixAPI {
             if (handle == 0) {
                 throw new RemixException("CreateLight failed", ErrorCode.GENERAL_FAILURE);
             }
+            if (sceneCapture != null) observe(capture -> capture.light(handle, info));
             return handle;
         } finally {
             if (pNext != 0) RemixBridge.freeExt(pNext);
@@ -695,24 +896,43 @@ public class RemixAPI {
 
     public void destroyLight(long handle) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(handle, "light");
+            sceneCapture.removeLight(handle); virtualResources.remove(handle); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.destroyLight(handle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("DestroyLight failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.removeLight(handle));
     }
 
     public void drawLightInstance(long handle) {
         checkInitialized();
+        if (virtualScene) {
+            requireVirtualResource(handle, "light"); sceneCapture.lightDrawn(handle); return;
+        }
+        flushSceneInstanceUpdates();
         int result = RemixBridge.drawLightInstance(handle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("DrawLightInstance failed", result);
         }
+        if (sceneCapture != null) observe(capture -> capture.lightDrawn(handle));
     }
 
     // ─── config ──────────────────────────────────────────────────────────
 
     public void setConfigVariable(String key, String value) {
         checkInitialized();
+        if (virtualScene) {
+            if (key.equals("rtx.showUI") && !value.equals("0")) {
+                throw new UnsupportedOperationException("The Remix overlay is unavailable with the native renderer");
+            }
+            virtualConfig.put(key, value);
+            if (!key.equals("rtx.showUI")) unappliedNativeFeatures.add("remix-config-options");
+            return;
+        }
         int result = RemixBridge.setConfigVariable(key, value);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("SetConfigVariable failed", result);
@@ -764,6 +984,18 @@ public class RemixAPI {
      */
     public int getConfigVariableResolved(String key, byte[] buffer) {
         checkInitialized();
+        if (virtualScene) {
+            if (!key.equals("rtx.showUI")) {
+                throw new RemixException("Remix options are unapplied in the native renderer: " + key, ErrorCode.INVALID_ARGUMENTS);
+            }
+            String value = virtualConfig.get(key);
+            if (value == null) throw new UnsupportedOperationException("No native renderer config equivalent for " + key);
+            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+            if (buffer.length >= bytes.length + 1) {
+                System.arraycopy(bytes, 0, buffer, 0, bytes.length); buffer[bytes.length] = 0;
+            }
+            return bytes.length + 1;
+        }
         int size = RemixBridge.getConfigVariableResolved(key, buffer);
         if (size < 0) {
             throw new RemixException("GetConfigVariableResolved failed for " + key, -size);
@@ -795,6 +1027,7 @@ public class RemixAPI {
      */
     public long acquireConfigLayer(String path, float priority, float blendThreshold) {
         checkInitialized();
+        if (virtualScene) throw new UnsupportedOperationException("Remix configuration layers have no native renderer equivalent");
         long handle = RemixBridge.acquireConfigLayer(path, priority, blendThreshold);
         if (handle == 0) {
             throw new RemixException("AcquireConfigLayer failed", ErrorCode.GENERAL_FAILURE);
@@ -812,6 +1045,7 @@ public class RemixAPI {
      */
     public void setConfigLayerBlending(long handle, float strength, float blendThreshold) {
         checkInitialized();
+        if (virtualScene) throw new UnsupportedOperationException("Remix configuration layers have no native renderer equivalent");
         int result = RemixBridge.setConfigLayerBlending(handle, strength, blendThreshold);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("SetConfigLayerBlending failed", result);
@@ -825,6 +1059,7 @@ public class RemixAPI {
      */
     public void releaseConfigLayer(long handle) {
         checkInitialized();
+        if (virtualScene) throw new UnsupportedOperationException("Remix configuration layers have no native renderer equivalent");
         int result = RemixBridge.releaseConfigLayer(handle);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("ReleaseConfigLayer failed", result);
@@ -834,6 +1069,7 @@ public class RemixAPI {
     /** @return true when the loaded runtime exposes the config-layer API (API >= 0.9.0) */
     public boolean isConfigLayersSupported() {
         checkInitialized();
+        if (virtualScene) return false;
         return RemixBridge.isConfigLayersSupported();
     }
 
@@ -841,6 +1077,7 @@ public class RemixAPI {
 
     public long dxvkCreateD3D9(boolean editorModeEnabled) {
         checkInitialized();
+        requireRemixRuntime();
         long ptr = RemixBridge.dxvkCreateD3D9(editorModeEnabled);
         if (ptr == 0) {
             throw new RemixException("dxvk_CreateD3D9 failed", ErrorCode.GENERAL_FAILURE);
@@ -850,6 +1087,7 @@ public class RemixAPI {
 
     public void dxvkRegisterD3D9Device(long d3d9Device) {
         checkInitialized();
+        requireRemixRuntime();
         int result = RemixBridge.dxvkRegisterD3D9Device(d3d9Device);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("dxvk_RegisterD3D9Device failed", result);
@@ -858,16 +1096,19 @@ public class RemixAPI {
 
     public long[] dxvkGetExternalSwapchain() {
         checkInitialized();
+        requireRemixRuntime();
         return RemixBridge.dxvkGetExternalSwapchain();
     }
 
     public long dxvkGetVkImage(long surface) {
         checkInitialized();
+        requireRemixRuntime();
         return RemixBridge.dxvkGetVkImage(surface);
     }
 
     public void dxvkCopyRenderingOutput(long destination, int type) {
         checkInitialized();
+        requireRemixRuntime();
         int result = RemixBridge.dxvkCopyRenderingOutput(destination, type);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("dxvk_CopyRenderingOutput failed", result);
@@ -876,6 +1117,7 @@ public class RemixAPI {
 
     public void dxvkSetDefaultOutput(int type, float r, float g, float b, float a) {
         checkInitialized();
+        requireRemixRuntime();
         int result = RemixBridge.dxvkSetDefaultOutput(type, r, g, b, a);
         if (result != ErrorCode.SUCCESS) {
             throw new RemixException("dxvk_SetDefaultOutput failed", result);
@@ -956,6 +1198,7 @@ public class RemixAPI {
 
     public InteropInfo dxvkGetInteropInfo() {
         checkInitialized();
+        requireRemixRuntime();
 
         InteropInfo interopInfo = new InteropInfo();
         int result = RemixBridge.dxvkGetInteropInfo(interopInfo);
@@ -964,5 +1207,9 @@ public class RemixAPI {
         }
 
         return interopInfo;
+    }
+
+    private void requireRemixRuntime() {
+        if (virtualScene) throw new UnsupportedOperationException("DXVK/Remix GPU calls are disabled for the native scene host");
     }
 }

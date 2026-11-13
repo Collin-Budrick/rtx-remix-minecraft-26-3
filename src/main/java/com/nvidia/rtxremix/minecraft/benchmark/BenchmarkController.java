@@ -172,6 +172,10 @@ public class BenchmarkController {
     private int counterCount;
     private int pendingFrameTimeIndex = -1;
     private boolean finishAfterPendingFrameTime = false;
+    private final NativeFrameWindow nativeFrameWindow = new NativeFrameWindow();
+    private java.util.function.Supplier<NativeFrameCounters.Snapshot> nativeFrameReader = () -> null;
+    private java.util.function.Supplier<String> backendStatusReader = () -> "{}";
+    private boolean nativeEvidenceStarted;
     private long lastStatusHeartbeatMillis = 0L;
     private long statusSequence = 0L;
 
@@ -181,6 +185,12 @@ public class BenchmarkController {
 
     public BenchmarkController() {
         this(new CameraController());
+    }
+
+    public void setBackendEvidence(java.util.function.Supplier<NativeFrameCounters.Snapshot> nativeFrames,
+                                   java.util.function.Supplier<String> backendStatus) {
+        nativeFrameReader = Objects.requireNonNull(nativeFrames);
+        backendStatusReader = Objects.requireNonNull(backendStatus);
     }
 
     public BenchmarkController(CameraController cameraController) {
@@ -503,6 +513,10 @@ public class BenchmarkController {
         // Benchmarks use a deterministic virtual 60 Hz camera clock. The path
         // itself is time-based; only the benchmark clock is frame-stepped.
         if (state == State.RECORDING) {
+            if (!nativeEvidenceStarted) {
+                nativeFrameWindow.begin(nativeFrameReader.get());
+                nativeEvidenceStarted = true;
+            }
             cameraController.applyBenchmarkTime(benchmarkCameraTimeMs(currentFrame));
         }
     }
@@ -965,6 +979,7 @@ public class BenchmarkController {
         if (pendingFrameTimeIndex >= 0 && pendingFrameTimeIndex < recordFrames) {
             int completedFrame = pendingFrameTimeIndex;
             frameTimeNanos[completedFrame] = fullFrameNanos;
+            nativeFrameWindow.sample(nativeFrameReader.get());
             pendingFrameTimeIndex = -1;
             captureScreenshotIfNeeded(completedFrame);
         }
@@ -1207,6 +1222,8 @@ public class BenchmarkController {
         counterValues = new long[counterCount][recordFrames];
         pendingFrameTimeIndex = -1;
         finishAfterPendingFrameTime = false;
+        nativeEvidenceStarted = false;
+        nativeFrameWindow.begin(null);
     }
 
     private void captureFrame(PerformanceTimer perfTimer) {
@@ -1379,6 +1396,8 @@ public class BenchmarkController {
         metadata.addProperty("warmupFrames", warmupFrames);
         metadata.addProperty("warmupLap", warmupLap);
         metadata.addProperty("recordFrames", recordFrames);
+        metadata.add("rendererBackend", JsonParser.parseString(backendStatusReader.get()));
+        metadata.add("nativeFrameEvidence", nativeFrameWindow.json(recordFrames));
         metadata.addProperty("benchmarkWorld", benchmarkWorldName);
         metadata.addProperty("cameraStorageKey", effectiveCameraStorageKey());
         metadata.addProperty("cameraPath", cameraPathName);

@@ -310,7 +310,7 @@ public class RtxRemixMod implements ClientModInitializer {
     }
 
     private static boolean isRemixMenuAvailable() {
-        if (instance != null && renderer != null && renderer.isInitialized()) {
+        if (instance != null && renderer != null && renderer.isInitialized() && !renderer.isNativeHostActive()) {
             return true;
         }
         Minecraft client = Minecraft.getInstance();
@@ -774,6 +774,29 @@ public class RtxRemixMod implements ClientModInitializer {
                         context.getSource().sendFeedback(Component.literal("RTX Rendering: OFF"));
                         return 1;
                     }))
+                .then(ClientCommands.literal("backend")
+                    .executes(context -> {
+                        context.getSource().sendFeedback(Component.literal(renderer != null
+                                ? renderer.backendStatus() : "Renderer unavailable"));
+                        return 1;
+                    }))
+                .then(ClientCommands.literal("lab")
+                    .then(ClientCommands.literal("snapshot")
+                        .executes(context -> {
+                            if (renderer == null || !renderer.isInitialized()) {
+                                context.getSource().sendError(Component.literal("Renderer unavailable"));
+                                return 0;
+                            }
+                            var source = context.getSource();
+                            var destination = renderer.defaultSceneExportPath();
+                            source.sendFeedback(Component.literal("Exporting captured scene to " + destination));
+                            renderer.exportSceneSnapshot(destination, false).whenComplete((path, error) ->
+                                    Minecraft.getInstance().execute(() -> {
+                                        if (error != null) source.sendError(Component.literal("Scene export failed: " + error.getMessage()));
+                                        else source.sendFeedback(Component.literal("Scene exported to " + path));
+                                    }));
+                            return 1;
+                        })))
                 .then(ClientCommands.literal("status")
                     .executes(context -> {
                         context.getSource().sendFeedback(Component.literal("RTX Status:"));

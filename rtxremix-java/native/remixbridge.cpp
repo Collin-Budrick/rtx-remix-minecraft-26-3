@@ -34,6 +34,7 @@
 #pragma comment(lib, "opengl32.lib")
 
 #include "remix_c.h"
+#include "instance_update_batch.h"
 
 // ════════════════════════════════════════════════════════════════════════════
 // Crash dump: VEH that writes a minidump and a human-readable crash report.
@@ -1370,6 +1371,30 @@ Java_com_nvidia_rtxremix_RemixBridge_sceneInstanceRemove(JNIEnv*, jclass,
     }
     return (jint)remixCall([&] { return g_remix.SceneInstanceRemove(
         (remixapi_SceneInstanceHandle)(uintptr_t)sceneInstanceHandle); });
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_nvidia_rtxremix_RemixBridge_sceneInstanceUpdateBatch(JNIEnv* env, jclass,
+    jobject buffer, jint count)
+{
+    if (!g_inited || !g_remix.SceneInstanceUpdate) {
+        return static_cast<jlong>(REMIXAPI_ERROR_CODE_NOT_INITIALIZED);
+    }
+    const void* data = buffer ? env->GetDirectBufferAddress(buffer) : nullptr;
+    const jlong capacity = buffer ? env->GetDirectBufferCapacity(buffer) : -1;
+    auto result = remixbridge::applyInstanceUpdates(data, capacity, count,
+        REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS, [](const remixbridge::InstanceUpdate& record) {
+            remixapi_InstanceInfo info = {};
+            info.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+            info.mesh = reinterpret_cast<remixapi_MeshHandle>(static_cast<uintptr_t>(record.mesh));
+            info.categoryFlags = record.categoryFlags;
+            info.doubleSided = record.doubleSided;
+            std::memcpy(&info.transform, record.transform, sizeof(record.transform));
+            auto handle = reinterpret_cast<remixapi_SceneInstanceHandle>(
+                static_cast<uintptr_t>(record.instance));
+            return remixCall([&] { return g_remix.SceneInstanceUpdate(handle, &info); });
+        });
+    return static_cast<jlong>(result.packed());
 }
 
 // ─── lights ──────────────────────────────────────────────────────────────

@@ -188,12 +188,16 @@ so can the Prism process that started the game. Stop only the client you own.
 The Windows Application event log names a fast-failing process by PID, which
 matters when it leaves no crash report.
 
-**Do not run a benchmark beside somebody else's Java process.** The harness
-calls `taskkill /f /im` for all `java.exe`, `javaw.exe`, and `capture.exe` on the
-machine before launches and during cleanup. Bypassing the live-client preflight
-does not disable this. Interactive `launch` and `world launch` do not run that
-cleanup. [Manual profiling](PROFILING.md#manual-capture-beside-another-client)
-avoids it, but concurrent clients still compete for CPU and GPU resources.
+Benchmark cleanup terminates only game and capture process objects retained by
+the current controller invocation. It never kills Java or capture processes by
+image name. Concurrent clients still compete for CPU and GPU resources, so
+measurements require a quiet GPU even though another user's game is preserved.
+
+`launch.launcher=modrinth` uses the explicitly adopted `RTX Rewrite Bench`
+duplicate and a supported instance/world deep link. It leaves the singleton
+app running and verifies the new JVM's exact game directory and required Java
+arguments. See [Modrinth renderer lab](MODRINTH_RENDERER_LAB.md). The Prism
+profile/account restrictions above apply only to the Prism adapter.
 
 An unfocused initialized client uses the persisted `framerate.unfocused`
 setting. `UnfocusedFramerateLimit` owns its default (currently 10 FPS) and the

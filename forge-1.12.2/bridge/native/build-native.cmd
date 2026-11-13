@@ -17,6 +17,7 @@ cl /nologo /O2 /Zi /LD /EHsc /std:c++17 /utf-8 ^
  /I"%BRIDGE_ROOT%\build\headers" ^
  /FI"%BRIDGE_ROOT%\build\headers\com_nvidia_rtxremix_RemixBridge.h" ^
  "%BRIDGE_SHARED_ROOT%\native\remixbridge.cpp" ^
+ "%BRIDGE_SHARED_ROOT%\native\renderer_lab_bridge.cpp" ^
  "%BRIDGE_ROOT%\native\abi-contract.cpp" ^
  "%BRIDGE_ROOT%\native\legacy-gl-interop.cpp" ^
  /Feremixbridge.dll /Fdremixbridge.pdb /link /nologo /DEBUG dbghelp.lib

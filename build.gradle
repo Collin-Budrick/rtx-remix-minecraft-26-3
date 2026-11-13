@@ -229,6 +229,9 @@ dependencies {
 
     // Testing
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    // The opt-in renderer interop diagnostic owns a hidden context, separate from Minecraft's SDL window.
+    testImplementation 'org.lwjgl:lwjgl-glfw:3.4.3'
+    testRuntimeOnly 'org.lwjgl:lwjgl-glfw:3.4.3:natives-windows'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     fabricTestRuntime "net.fabricmc:fabric-loader-junit:${fabricLoaderVersion}"
 }
@@ -258,6 +261,33 @@ test {
 
 def gitBranch = providers.exec { commandLine 'git', 'rev-parse', '--abbrev-ref', 'HEAD' }
         .standardOutput.asText.map { it.trim() }
+
+tasks.register('rendererLabFixture', JavaExec) {
+    group = 'verification'
+    description = 'Exports the deterministic Java scene-packet fixture for native renderer checks.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.nvidia.rtxremix.RendererLabFixture'
+    args layout.buildDirectory.file('renderer-lab/fixture.rslb').get().asFile.absolutePath
+}
+
+tasks.register('rendererLabInteropSmoke', JavaExec) {
+    group = 'verification'
+    description = 'Explicit GPU check of the imported native host and actual JNI/GL color/depth/fence path.'
+    dependsOn tasks.named('rendererLabFixture')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.nvidia.rtxremix.RendererLabInteropSmoke'
+    systemProperty 'rtxremix.smoke.aaMode', providers.gradleProperty('rendererLabAa').orElse('0').get()
+    def runtime = providers.gradleProperty('rendererLabRuntime')
+            .orElse(layout.projectDirectory.dir('native/renderer-lab/.deps/RTXPT/bin').asFile.absolutePath)
+    doFirst {
+        args layout.buildDirectory.file('native/win64/remixbridge.dll').get().asFile.absolutePath,
+                new File(runtime.get(), 'RendererLabHost.dll').absolutePath, runtime.get(),
+                layout.buildDirectory.file('renderer-lab/fixture.rslb').get().asFile.absolutePath,
+                layout.buildDirectory.dir('renderer-lab/interop-' + System.currentTimeMillis()).get().asFile.absolutePath
+    }
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
 
 processResources {
     // Repository-only asset notes contain relative links, not runtime resources.
@@ -484,6 +514,9 @@ tasks.register('compileNativeWin64', Exec) {
     commandLine 'cmd', '/c', file('rtxremix-java/native/build_native.bat').absolutePath, 'x64'
     inputs.files file('rtxremix-java/native/build_native.bat'),
                  file('rtxremix-java/native/remixbridge.cpp'),
+                 file('rtxremix-java/native/renderer_lab_bridge.cpp'),
+                 file('rtxremix-java/native/instance_update_batch.h'),
+                 file('native/renderer-lab/host/RendererLabHost.h'),
                  file('rtxremix-java/native/include/remix_c.h')
     outputs.files file('build/native/win64/remixbridge.dll'),
                   file('build/native/win64/remixbridge.pdb')
@@ -496,6 +529,9 @@ tasks.register('compileNativeArm64', Exec) {
     commandLine 'cmd', '/c', file('rtxremix-java/native/build_native.bat').absolutePath, 'arm64'
     inputs.files file('rtxremix-java/native/build_native.bat'),
                  file('rtxremix-java/native/remixbridge.cpp'),
+                 file('rtxremix-java/native/renderer_lab_bridge.cpp'),
+                 file('rtxremix-java/native/instance_update_batch.h'),
+                 file('native/renderer-lab/host/RendererLabHost.h'),
                  file('rtxremix-java/native/include/remix_c.h')
     outputs.files file('build/native/arm64/remixbridge.dll'),
                   file('build/native/arm64/remixbridge.pdb')

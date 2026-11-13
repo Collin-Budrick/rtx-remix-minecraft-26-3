@@ -11,7 +11,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import client, diagnostics, install, launcher, prism, sdk
+from . import client, diagnostics, install, launcher, prism, renderer_lab, sdk
 from .benchmark import catalog, runner, screenshots, tracy, util
 
 
@@ -118,6 +118,8 @@ def launcher_mismatch(a: dict, b: dict) -> str | None:
 def cmd_compare(args) -> int:
     a = resolve_run(args.a)
     b = resolve_run(args.b)
+    if problem := renderer_lab.comparison_problem(a, b):
+        raise RuntimeError(f"Renderer comparison withheld: {problem}")
     if mismatch := launcher_mismatch(a, b):
         print(f"WARNING: {mismatch}")
     for label, key, higher_better in [
@@ -575,6 +577,74 @@ def cmd_diag_focus_torture(args) -> int:
     )
 
 
+def cmd_modrinth(args) -> int:
+    from .modrinth_launcher import ModrinthLauncher, data_directory, profiles
+
+    if args.modrinth_command == "profiles":
+        for profile in profiles(data_directory(runner.load_config())):
+            print(f"{profile.id}  {profile.name}  {profile.game_version}/{profile.loader}  {profile.path}")
+        return 0
+    launcher_instance = ModrinthLauncher()
+    if args.modrinth_command == "adopt":
+        launcher_instance.adopt()
+        print(f"Adopted isolated benchmark instance: {launcher_instance.game_dir}")
+    elif args.modrinth_command == "jvm-args":
+        request = client.LaunchRequest(
+            arch="win64",
+            env={},
+            preset=runner.configured_preset_value(launcher_instance.config),
+            jfr_path=launcher_instance.game_dir / "benchmark" / "results" / "profile.jfr",
+        )
+        print("Set these persistent Java arguments in the benchmark duplicate's Modrinth settings:")
+        print("\n".join(launcher_instance.required_jvm_args(request)))
+    return 0
+
+
+def cmd_renderer_lab(args) -> int:
+    if args.lab_command == "capabilities":
+        print(
+            json.dumps(
+                {"backends": renderer_lab.BACKENDS, "note": "Descriptions are not implementation proof."}, indent=2
+            )
+        )
+        return 0
+    if args.lab_command == "review":
+        directory = (util.RESULTS_DIR / args.run).resolve()
+        if directory.parent != util.RESULTS_DIR.resolve():
+            raise RuntimeError("Review requires an exact run directory name under tools/results.")
+        manifest_path = directory / "manifest.json"
+        manifest = util.read_json(manifest_path)
+        lab = manifest.get("rendererLab")
+        if not isinstance(lab, dict):
+            raise RuntimeError("This result has no renderer-lab evidence to review.")
+        if not args.visual_accepted and not args.runtime_verified:
+            raise RuntimeError("Record --visual-accepted and/or --runtime-verified only after inspecting that run.")
+        if args.visual_accepted:
+            lab["visualReview"] = "accepted"
+        if args.runtime_verified:
+            lab["runtimeQualityReview"] = "verified"
+        lab.setdefault("reviewHistory", []).append(
+            {
+                "timestamp": dt.datetime.now(dt.UTC).isoformat(),
+                "note": args.note,
+                "visualAccepted": args.visual_accepted,
+                "runtimeVerified": args.runtime_verified,
+            }
+        )
+        util.write_json(manifest_path, manifest)
+        print(f"Recorded review; renderer capability and fixture gates still apply: {manifest_path}")
+        return 0
+    config = runner.load_config()
+    if not renderer_lab.enabled(config):
+        raise RuntimeError("Set rendererLab.enabled=true in tools/config.local.json before freezing fixtures.")
+    launcher_instance = client.active()
+    launcher_instance.check(interactive=False)
+    selection = runner.configure_benchmark_selection(config)
+    path = renderer_lab.freeze(config, selection, launcher_instance.game_dir, replace=args.replace)
+    print(f"Frozen fixture and enabled resource packs: {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ci_runs = configured_ci_runs()
     parser = argparse.ArgumentParser(
@@ -597,6 +667,26 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=HelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
+
+    p = sub.add_parser("modrinth", help="inspect or explicitly adopt an existing isolated Modrinth duplicate")
+    modrinth_sub = p.add_subparsers(dest="modrinth_command", required=True)
+    for name in ("profiles", "adopt", "jvm-args"):
+        child = modrinth_sub.add_parser(name)
+        child.set_defaults(func=cmd_modrinth)
+
+    p = sub.add_parser("renderer-lab", help="freeze comparison fixtures or describe renderer capability requirements")
+    lab_sub = p.add_subparsers(dest="lab_command", required=True)
+    child = lab_sub.add_parser("freeze")
+    child.add_argument("--replace", action="store_true", help="begin a new baseline series with a new fixture lock")
+    child.set_defaults(func=cmd_renderer_lab)
+    child = lab_sub.add_parser("capabilities")
+    child.set_defaults(func=cmd_renderer_lab)
+    child = lab_sub.add_parser("review", help="record a human review of an exact measured result")
+    child.add_argument("run", metavar="RUN_ID")
+    child.add_argument("--visual-accepted", action="store_true")
+    child.add_argument("--runtime-verified", action="store_true")
+    child.add_argument("--note", required=True)
+    child.set_defaults(func=cmd_renderer_lab)
 
     p = sub.add_parser("menu", help="open the developer dashboard or resolve a launch with --mode")
     p.add_argument(
@@ -726,9 +816,11 @@ def build_parser() -> argparse.ArgumentParser:
         "launch",
         help="launch the game (main menu or into a world) with SDK + resource-pack selection",
         description=(
-            "Builds the mod, installs it into this checkout's Prism instance, and starts Minecraft through\n"
-            "Prism as the signed-in Microsoft account; use prism signin if needed. Omit --world for the\n"
-            "main menu."
+            "Builds the mod and starts Minecraft through the configured launcher.\n"
+            "The Prism adapter installs it into this checkout's Prism instance;\n"
+            "use prism signin if needed for that adapter. The Modrinth adapter uses an\n"
+            "explicitly adopted isolated duplicate.\n"
+            "Omit --world for the main menu."
         ),
         formatter_class=HelpFormatter,
     )

@@ -1,0 +1,23 @@
+{
+  "Capsaicin": {
+    "url": "https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin.git",
+    "commit": "914b91596cd119eda85fbc1d3c7ee6ac391b1452",
+    "release": "v1.3",
+    "license": "MIT",
+    "submodules": ["third_party/gfx"]
+  },
+  "VoxelRT": {
+    "url": "https://github.com/dubiousconst282/VoxelRT.git",
+    "commit": "e605812840a9f6abbadf84a436f8602e2972ee43",
+    "release": "alt-renderers",
+    "license": "MIT",
+    "submodules": []
+  },
+  "RTXDI": {
+    "url": "https://github.com/NVIDIA-RTX/RTXDI.git",
+    "commit": "fdbd9b36dc55827b67a03f926e78cfad9b1c1c57",
+    "release": "v3.2.0",
+    "license": "NVIDIA RTX SDK",
+    "submodules": ["External/donut", "External/NRD", "Libraries/Rtxdi", "External/cxxopts", "External/NVAPI"]
+  }
+}

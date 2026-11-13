@@ -46,8 +46,13 @@ missing runtime directories itself, without depending on the Python tooling.
 
 Every client launch goes through the client launcher that `client.active()` in
 `src/rtx_tools/client.py` returns, which owns the game directory
-(`util.RUN_DIR`). The client launcher is `PrismLauncher` in
-`src/rtx_tools/prism_launcher.py`: it builds and installs into a
+(`util.RUN_DIR`). `launch.launcher` selects `modrinth` or the upstream default
+`prism`. `ModrinthLauncher` in `src/rtx_tools/modrinth_launcher.py` requires an
+explicitly adopted, separate `RTX Rewrite Bench` instance. Its app database is
+read-only metadata; duplication and persistent JVM settings belong to the app
+UI. Never target the source gameplay profile or terminate the singleton app.
+See `docs/MODRINTH_RENDERER_LAB.md` for the isolation and comparison contract.
+`PrismLauncher` in `src/rtx_tools/prism_launcher.py` builds and installs into a
 checkout-specific Prism instance and starts the game through Prism as a
 signed-in Microsoft account that owns Minecraft. Installed Prism uses its
 normal account profile; portable Prism uses `run-prism/`. `rtx.bat prism
@@ -78,7 +83,8 @@ widening a production signature to accommodate the double.
 
 Identify development clients by command line and PID, never only window title,
 and run at most one client per checkout's game directory. The benchmark runner's
-`kill_leftovers()` is machine-wide, not checkout-scoped. Read
+`kill_leftovers()` may terminate only process objects retained from launches by
+this controller invocation. Never add image-wide Java or capture kills. Read
 `docs/LAUNCHER.md` Development Clients before working on a shared machine.
 
 `rtx.bat diag hang` captures Java and native stacks without killing the target.

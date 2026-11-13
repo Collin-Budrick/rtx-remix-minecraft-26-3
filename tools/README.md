@@ -2,8 +2,10 @@
 
 This directory contains the launch, benchmark, and profiling tools for RTX
 Remix for Minecraft. The Gradle build and the packaged mod do not depend on
-this directory. The tools launch Minecraft through Prism Launcher, signed in to
-a Microsoft account that owns Minecraft: Java Edition.
+this directory. The tools launch Minecraft through the selected launcher and
+its signed-in account. This workspace uses the opt-in
+[isolated Modrinth workflow](docs/MODRINTH_RENDERER_LAB.md); the upstream Prism
+workflow remains available.
 
 The launcher and local asset workflows are self-contained. Shipped defaults
 pin the demo world, built for this project by
@@ -23,6 +25,9 @@ covers the rest.
 Run commands from the repository root on Windows. A normal clone includes the
 Java wrapper and JNI sources tracked at root `rtxremix-java/`; the launcher
 stages the separately distributed SDK.
+
+For Modrinth, follow [Modrinth renderer lab](docs/MODRINTH_RENDERER_LAB.md).
+The following first-run instructions describe the upstream Prism default.
 
 Install [Prism Launcher](https://prismlauncher.org) first; the tools never
 download it. Then open its account profile:

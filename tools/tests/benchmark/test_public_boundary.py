@@ -40,7 +40,7 @@ class PublicBoundaryTests(unittest.TestCase):
 # outside this repository and can be passed to the same scan functions.
 # Each row is (label, byte regex, exact repository-relative exception paths).
 # Upstream license texts retain their published addresses. All other paths are
-# scanned, including new files beside these two verbatim license copies.
+# scanned, including new files beside these verbatim license copies.
 PUBLIC_LEAK_PATTERNS = [
     (
         "merge request reference",
@@ -59,6 +59,7 @@ PUBLIC_LEAK_PATTERNS = [
         "nvidia.com e-mail",
         re.compile(rb"[a-z0-9._%+-]+@nvidia\.com", re.IGNORECASE),
         {
+            "native/renderer-lab/licenses/RTXPT-LICENSE.txt",
             "packaging/licenses/remix-runtime/LICENSE.sharc.txt",
             "packaging/licenses/remix-runtime/ThirdPartyLicenses.txt",
         },
@@ -339,6 +340,13 @@ class PublicLeakPatternTests(unittest.TestCase):
         self.assertIn(
             "nvidia.com e-mail",
             leak_labels(sample, PUBLIC_LEAK_PATTERNS, name="packaging/licenses/remix-runtime/new.txt"),
+        )
+        self.assertEqual(
+            [], leak_labels(sample, PUBLIC_LEAK_PATTERNS, name="native/renderer-lab/licenses/RTXPT-LICENSE.txt")
+        )
+        self.assertIn(
+            "nvidia.com e-mail",
+            leak_labels(sample, PUBLIC_LEAK_PATTERNS, name="native/renderer-lab/licenses/new.txt"),
         )
 
     def test_public_packman_bootstrap_host_is_allowed(self):

@@ -158,14 +158,12 @@ while that Prism profile is running, which could take the launch over without
 its settings. See
 [Development clients](LAUNCHER.md#development-clients).
 
-**The benchmark cleanup is machine-wide.** `runner.kill_leftovers()` calls
-`taskkill /f /im` for every `java.exe`, `javaw.exe`, and `capture.exe` before
-launches, after runs, and on exit. Other clients, including another worktree's
-game, IDE JVMs, and Gradle daemons can be killed without warning. The
-checkout-scoped preflight does not limit this, and skipping it does not disable
-cleanup. Wait until the machine is free,
-or use [manual profiling](PROFILING.md#manual-capture-beside-another-client).
-Interactive `launch` and `world launch` do not perform that cleanup.
+`runner.kill_leftovers()` terminates only process objects retained from this
+controller's own game and Tracy capture launches. It does not kill unrelated
+games, IDE JVMs, Gradle daemons, or the singleton Modrinth app. Reserve the GPU
+for measurement to avoid workload contamination. The opt-in
+[Modrinth renderer lab](MODRINTH_RENDERER_LAB.md) adds isolated-profile checks,
+frozen fixtures, strict backend proof and a visual-review comparison gate.
 
 Every CLI launch also parks `javaw.dxvk-cache`, `java.dxvk-cache`,
 `nrc_session_log.txt`, and `metrics.txt` from `<gameDir>` under
@@ -252,7 +250,7 @@ does not make a machine or workload comparable by itself.
 - Invoke the intended checkout's `tools\rtx.bat` and `gradlew.bat`. The CLI's
   `benchmark/util.py` anchors configuration, staging, assets, and results to its
   own location, not the caller's current directory.
-- Reserve the machine for `run`: its cleanup kills unrelated Java processes.
+- Reserve the machine for `run` so unrelated workloads do not contaminate timings.
 - Pass `--runs` explicitly for quoted results. The absolute poll deadline still
   applies even when status advances; see [Stall watchdogs](#stall-watchdogs).
 - `warmupFrames` counts rendered frames, not completed terrain streaming.
@@ -318,7 +316,7 @@ art pack changes.
 configuration selects the demo world and the art pack and needs no change; if
 you use your own world, select it and the pack mode in
 `tools/config.local.json` first. Close the client between marking and
-refreshing; refresh uses the same machine-wide process cleanup as benchmark
+refreshing; refresh uses the same controller-owned process cleanup as benchmark
 capture. The example launches an imported world without the art pack, as such
 a configuration would select:
 

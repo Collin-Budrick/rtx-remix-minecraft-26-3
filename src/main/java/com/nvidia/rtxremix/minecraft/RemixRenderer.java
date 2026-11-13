@@ -14,6 +14,7 @@ import com.nvidia.rtxremix.InteropInfo;
 import com.nvidia.rtxremix.PresentInfo;
 import com.nvidia.rtxremix.RemixAPI;
 import com.nvidia.rtxremix.RemixException;
+import com.nvidia.rtxremix.ScenePacketRecorder;
 import com.nvidia.rtxremix.StartupInfo;
 import com.nvidia.rtxremix.minecraft.asset.RemixInstanceStore;
 import com.nvidia.rtxremix.minecraft.asset.RemixLightStore;
@@ -142,6 +143,15 @@ public class RemixRenderer {
 
     // Remix API instance
     private RemixAPI remixApi;
+    private RendererBackendSelection backendSelection;
+    private boolean automaticSceneExportStarted;
+    private long nativeHost;
+    private com.nvidia.rtxremix.minecraft.gl.D3D12Interop nativeInterop;
+    private final java.nio.ByteBuffer nativeSharedTargets = java.nio.ByteBuffer.allocateDirect(
+            com.nvidia.rtxremix.RendererLabBridge.SHARED_TARGET_BYTES).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    private boolean nativeNeedsFullScene = true, nativeFrameReady, nativeFrameProven;
+    private final com.nvidia.rtxremix.minecraft.benchmark.NativeFrameCounters nativeFrames =
+            new com.nvidia.rtxremix.minecraft.benchmark.NativeFrameCounters();
     private boolean initialized = false;
     private long windowHandle;
     
@@ -257,6 +267,7 @@ public class RemixRenderer {
     private int cntParticleMeshUpdates = -1;
     
     public RemixRenderer() {
+        benchmarkController.setBackendEvidence(this::nativeFrameCounters, this::backendStatus);
     }
     
     /**
@@ -266,6 +277,7 @@ public class RemixRenderer {
         LOGGER.info("Initializing RTX Remix renderer...");
 
         try {
+            backendSelection = RendererBackendSelection.configured();
             lastCameraMediumHandle = Long.MIN_VALUE;
 
             Minecraft client = Minecraft.getInstance();
@@ -290,8 +302,26 @@ public class RemixRenderer {
             int blankedValues = RemixAPI.redactCommandLineOptions(dllPath, ACCOUNT_OPTIONS);
             LOGGER.info("Blanked {} account values in the process command line", blankedValues);
 
+            if (backendSelection.nativeHostRequested()) {
+                try { initializeNativeHost(dllPath, client); }
+                catch (RuntimeException | LinkageError failure) {
+                    try { closeNativeHost(); } catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+                    if (remixApi != null) {
+                        try { remixApi.shutdown(); } catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+                        remixApi = null;
+                    }
+                    if (!Boolean.parseBoolean(System.getProperty("rtxremix.backend.fallback", "true"))) throw failure;
+                    LOGGER.error("Native SDK host unavailable; explicitly falling back to Remix", failure);
+                    backendSelection = backendSelection.unavailableNativeHost("native SDK host unavailable; explicit Remix fallback");
+                }
+            }
+            if (nativeHost == 0) {
             remixApi = RemixAPI.load(dllPath);
             LOGGER.info("RTX Remix API loaded successfully");
+            if (backendSelection.sceneCapture()) {
+                remixApi.enableSceneCapture(new ScenePacketRecorder());
+                LOGGER.info("Scene capture is enabled; this process still renders with Remix");
+            }
             if (!FORWARD_REMIX_FAULTS) {
                 remixApi.setFaultForwarding(false);
                 LOGGER.info("Native crashes in Remix calls go to hs_err_pid*.log, as rtxremix.forwardRemixFaults=false asks");
@@ -358,8 +388,6 @@ public class RemixRenderer {
 
             }
 
-            postProcessingSettings = new PostProcessingSettings(remixApi::setConfigVariable);
-            
             // NOTE: Submit() allocates the image, but semaphores are always ready
             InteropInfo interopInfo = remixApi.dxvkGetInteropInfo();
             LOGGER.info(
@@ -374,6 +402,8 @@ public class RemixRenderer {
                     "GL interop created: vkDoneSemaphore=0x{}, clientDoneSemaphore=0x{}",
                     Integer.toHexString(interopGlVk.getVkDoneSemaphore()),
                     Integer.toHexString(interopGlVk.getClientDoneSemaphore()));
+            }
+            postProcessingSettings = new PostProcessingSettings(remixApi::setConfigVariable);
             
             textureManager = new BlockTextureManager(this);
             chunkManager = new ChunkManager(this);
@@ -452,6 +482,7 @@ public class RemixRenderer {
             // rendering a scene nothing drives. The gate runs before the
             // renderer calls itself initialized, so a failing install never
             // logs success.
+            if (!remixApi.isVirtualScene()) {
             if (!remixApi.isConfigLayersSupported()) {
                 throw new IllegalStateException("runtime lacks the config-layer API (needs API >= 0.9.0)");
             }
@@ -468,9 +499,13 @@ public class RemixRenderer {
             }
             confLayerDriver = driver;
             LOGGER.info("Config option-layers acquired - conf-layer blending active");
+            } else {
+                LOGGER.warn("Native renderer prototype: Remix conf layers and camera-medium water absorption are unavailable; qualityComparable=false");
+            }
 
             initialized = true;
-            LOGGER.info("RTX Remix renderer initialized successfully!");
+            LOGGER.info("{} renderer initialized successfully!", nativeHost != 0 ? "Native SDK host" : "RTX Remix");
+            LOGGER.info("RTX_BACKEND_STATUS {}", backendStatus());
 
         } catch (RemixException e) {
             LOGGER.error("Failed to initialize RTX Remix: {} (error code: {})",
@@ -481,6 +516,46 @@ public class RemixRenderer {
             LOGGER.error("Failed to initialize RTX Remix", e);
             releasePartialInitialization();
             throw new RuntimeException("RTX Remix initialization failed", e);
+        }
+    }
+
+    private void initializeNativeHost(String dllPath, Minecraft client) {
+        Path gameDir = FabricLoader.getInstance().getGameDir();
+        Path hostDll = Path.of(System.getProperty("rtxremix.nativeHost.path",
+                gameDir.resolve("remix-sdk/renderer_lab_host.dll").toString())).toAbsolutePath();
+        if (!Files.isRegularFile(hostDll)) throw new IllegalStateException("Native SDK host DLL not found: " + hostDll);
+        Path runtimeDir = Path.of(System.getProperty("rtxremix.nativeHost.runtime", hostDll.getParent().toString())).toAbsolutePath();
+        Path sceneDir = gameDir.resolve("renderer-lab/native-scene").toAbsolutePath();
+        remixApi = RemixAPI.virtualScene(dllPath);
+        long luid = com.nvidia.rtxremix.RendererLabBridge.glAdapterLuid();
+        nativeInterop = new com.nvidia.rtxremix.minecraft.gl.D3D12Interop(luid);
+        int flags = Boolean.getBoolean("rtxremix.nativeHost.allowApproximations") ? 1 : 0;
+        if (Boolean.getBoolean("rtxremix.nativeHost.debugValidation")) flags |= 2;
+        nativeHost = com.nvidia.rtxremix.RendererLabBridge.create(hostDll.toString(), runtimeDir.toString(), sceneDir.toString(),
+                client.getWindow().getWidth(), client.getWindow().getHeight(), luid, flags,
+                Integer.getInteger("rtxremix.nativeHost.aaMode", 1));
+        if (nativeHost == 0) throw new IllegalStateException("Native SDK host returned a null host");
+        nativeFrames.beginSession();
+        nativeNeedsFullScene = true;
+        nativeFrameReady = false;
+        nativeFrameProven = false;
+        nativeSharedTargets.putInt(0, com.nvidia.rtxremix.RendererLabBridge.SHARED_TARGET_BYTES).putInt(4, 1);
+        LOGGER.warn("Native SDK host selected with no Remix runtime initialization: geometry/material updates reload the SDK scene; "
+                + "qualityComparable=false; material/refraction/SSS/area-light/sky semantics require review; approximationsAllowed={}",
+                (flags & 1) != 0);
+    }
+
+    private void closeNativeHost() {
+        try {
+            if (nativeInterop != null) nativeInterop.close();
+        } finally {
+            nativeInterop = null;
+            try {
+                if (nativeHost != 0) com.nvidia.rtxremix.RendererLabBridge.destroy(nativeHost);
+            } finally {
+                nativeHost = 0;
+                nativeFrameReady = false;
+            }
         }
     }
 
@@ -799,6 +874,7 @@ public class RemixRenderer {
         if (!initialized || remixApi == null) {
             return;
         }
+        if (nativeHost != 0) nativeFrameReady = false;
 
         joinBurstHold.onFrame(System.nanoTime());
 
@@ -1261,6 +1337,69 @@ public class RemixRenderer {
             return;
         }
         benchmarkController.onMinecraftRenderFrameEnd(fullFrameNanos, perfTimer);
+        long exportAfter = Long.getLong("rtxremix.sceneExportAfterFrames", 0L);
+        ScenePacketRecorder capture = remixApi != null ? remixApi.getSceneCapture() : null;
+        if (exportAfter > 0 && !automaticSceneExportStarted && capture != null
+                && capture.frameId() >= exportAfter && capture.ready()) {
+            automaticSceneExportStarted = true;
+            exportSceneSnapshot(defaultSceneExportPath(), false).exceptionally(failure -> {
+                LOGGER.error("Scene export failed; no standalone-renderer result is available", failure);
+                return null;
+            });
+        }
+    }
+
+    public String backendStatus() {
+        if (initialized && nativeHost != 0) {
+            return "{\"requested\":\"native-hybrid\",\"active\":\"" + (nativeFrameProven ? "native-hybrid" : "initializing")
+                    + "\",\"presentation\":\"minecraft-opengl\",\"sceneCapture\":true,\"nativeInProcess\":" + nativeFrameProven
+                    + ",\"fallback\":false,\"qualityComparable\":false,\"frameGeneration\":false,\"scenePacketVersion\":1,"
+                    + "\"unsupportedFeatures\":[\"remix-conf-layers\",\"water-medium-and-refraction-semantics\","
+                    + "\"subsurface-scattering\",\"area-light-semantics\",\"sky-and-lens-calibration-unreviewed\","
+                    + "\"SDK-material-approximations\",\"geometry-material-update-reload-hitches\"],"
+                    + "\"reason\":\"real SDK hybrid host; Minecraft capture, GL lens, weather and HUD retained; quality review pending\","
+                    + "\"nativeFrameCounters\":" + new com.google.gson.Gson().toJson(nativeFrames.snapshot()) + "}";
+        }
+        return initialized && backendSelection != null ? backendSelection.proofJson()
+                : "{\"active\":\"unavailable\",\"nativeInProcess\":false}";
+    }
+
+    public boolean isNativeHostActive() { return nativeHost != 0; }
+
+    public com.nvidia.rtxremix.minecraft.benchmark.NativeFrameCounters.Snapshot nativeFrameCounters() {
+        return nativeHost != 0 ? nativeFrames.snapshot() : null;
+    }
+
+    public void finishNativeFrame() {
+        try { if (nativeInterop != null) nativeInterop.release(); }
+        catch (RuntimeException | LinkageError failure) { nativeFrames.failed(); throw failure; }
+    }
+
+    public Path defaultSceneExportPath() {
+        String configured = System.getProperty("rtxremix.sceneExportPath");
+        return configured == null || configured.isBlank()
+                ? FabricLoader.getInstance().getGameDir().resolve("renderer-lab/scene.rslb")
+                : Path.of(configured);
+    }
+
+    /** Captures the retained scene without moving the camera or changing the save. */
+    public CompletableFuture<Path> exportSceneSnapshot(Path destination, boolean updatesOnly) {
+        ScenePacketRecorder capture = remixApi != null ? remixApi.getSceneCapture() : null;
+        if (!initialized || capture == null || !capture.ready()) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "Start with -Drtxremix.backend=scene-export and load a world before exporting"));
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                var summary = updatesOnly ? capture.writeUpdates(destination) : capture.writeSnapshot(destination);
+                LOGGER.info("RTX_SCENE_CAPTURE path={} frame={} meshes={} instances={} textures={} complete={} renderer=remix",
+                        destination.toAbsolutePath(), summary.frame, summary.meshes,
+                        summary.instances, summary.textures, summary.complete);
+                return destination.toAbsolutePath();
+            } catch (java.io.IOException e) {
+                throw new CompletionException(e);
+            }
+        });
     }
 
     /**
@@ -1291,6 +1430,7 @@ public class RemixRenderer {
             float worldFov = camera.getFov();
             int width = client.getWindow().getWidth();
             int height = client.getWindow().getHeight();
+            remixApi.setSceneCaptureViewport(width, height);
             float aspect = (float) width / (float) height;
             float lodRadius = lodTerrain != null ? lodTerrain.radiusBlocks() : 0f;
             if (weatherRenderer != null) {
@@ -1412,7 +1552,42 @@ public class RemixRenderer {
     }
     
     private void submitFrame() {
-        remixApi.submit(null);
+        if (nativeHost == 0) { remixApi.submit(null); return; }
+        nativeFrames.attempt();
+        try {
+            remixApi.submit(null);
+            nativeInterop.release(); // Also covers frames where a minimized surface skipped its swap hook.
+            ScenePacketRecorder capture = remixApi.getSceneCapture();
+            if (!capture.ready()) { nativeFrames.unready(); return; }
+            var packet = capture.packet(nativeNeedsFullScene);
+            var bytes = packet.bytes();
+            if (nativePending(com.nvidia.rtxremix.RendererLabBridge.apply(nativeHost, bytes, bytes.remaining()))) return;
+            capture.acknowledge(packet);
+            nativeNeedsFullScene = false;
+            Minecraft client = Minecraft.getInstance();
+            int width = client.getWindow().getWidth(), height = client.getWindow().getHeight();
+            if (nativeInterop.width() > 0 && (nativeInterop.width() != width || nativeInterop.height() != height)) {
+                nativeInterop.close(); // GL releases its borrowed allocations before the host resizes them.
+            }
+            if (nativePending(com.nvidia.rtxremix.RendererLabBridge.render(nativeHost, packet.frame, width, height))) return;
+            nativeSharedTargets.putInt(0, com.nvidia.rtxremix.RendererLabBridge.SHARED_TARGET_BYTES).putInt(4, 1);
+            if (nativePending(com.nvidia.rtxremix.RendererLabBridge.sharedTargets(nativeHost, nativeSharedTargets))) return;
+            if (!nativeFrames.published(nativeSharedTargets.getLong(16), nativeSharedTargets.getLong(80))) return;
+            nativeInterop.acquire(nativeSharedTargets);
+            nativeFrameReady = true;
+            if (!nativeFrameProven) {
+                nativeFrameProven = true;
+                LOGGER.info("RTX_BACKEND_STATUS {}", backendStatus());
+                LOGGER.info("RTX_NATIVE_FRAME frame={} width={} height={} generation={} readyFence={} renderer=native-hybrid qualityComparable=false",
+                        packet.frame, width, height, nativeSharedTargets.getLong(16), nativeSharedTargets.getLong(80));
+            }
+        } catch (RuntimeException | LinkageError failure) { nativeFrames.failed(); throw failure; }
+    }
+
+    private boolean nativePending(int status) {
+        if (status == com.nvidia.rtxremix.RendererLabBridge.PENDING) { nativeFrames.pending(); return true; }
+        if (status != com.nvidia.rtxremix.RendererLabBridge.OK) throw new IllegalStateException("Unexpected native host status: " + status);
+        return false;
     }
     
     /**
@@ -1423,6 +1598,10 @@ public class RemixRenderer {
      * per run rather than once per frame.
      */
     public void presentFrameVk() {
+        if (nativeHost != 0) {
+            finishNativeFrame();
+            return;
+        }
         if (!FAULT_IN_REMIX_CALL.isEmpty() && presentedFrames == FAULT_IN_REMIX_CALL_FRAME) {
             faultInRemixCall();
         }
@@ -1486,6 +1665,7 @@ public class RemixRenderer {
      * no interop texture exists this frame; the caller then skips compositing.
      */
     public int blitVkImageToGL() {
+        if (nativeHost != 0) return nativeFrameReady ? nativeInterop.colorTexture() : 0;
         try (ProfileScope ignored = ProfileScope.begin("Interop.VKToGL")) {
             // must be called after Submit(), which allocates the image
             InteropInfo interopInfo = remixApi.dxvkGetInteropInfo();
@@ -1534,6 +1714,7 @@ public class RemixRenderer {
     }
 
     public int getInteropDepthTexture() {
+        if (nativeHost != 0) return nativeFrameReady ? nativeInterop.depthTexture() : 0;
         return interopGlVk.getDepthTexture();
     }
     
@@ -1587,6 +1768,8 @@ public class RemixRenderer {
      */
     private void doClearWorld() {
         LOGGER.info("Clearing world resources...");
+        nativeNeedsFullScene = true;
+        nativeFrameReady = false;
         joinInFlightParticleRenderTask();
         discardPendingParticleFrame();
         
@@ -1627,6 +1810,7 @@ public class RemixRenderer {
                 LOGGER.error("Failed to release cloud resources during world cleanup", e);
             }
         }
+        if (remixApi != null && remixApi.getSceneCapture() != null) remixApi.getSceneCapture().clearScene();
         LOGGER.info("World resources cleared");
     }
     
@@ -1701,6 +1885,8 @@ public class RemixRenderer {
 
         shutdownAssetStores();
 
+        closeNativeHost();
+        if (remixApi != null && remixApi.isVirtualScene()) shutdownRemixApi();
         if (interopGlVk != null) {
             interopGlVk.destroy();
             interopGlVk = null;

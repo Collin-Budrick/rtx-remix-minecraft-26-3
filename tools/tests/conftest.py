@@ -33,6 +33,10 @@ def real_client_launch(args: object) -> str | None:
         return "Gradle runClient"
     if names and names[0] in ("prismlauncher", "prismlauncher.exe"):
         return "Prism Launcher"
+    if (names and names[0] in ("modrinth app", "modrinth app.exe")) or any(
+        word.startswith("modrinth://launch/") for word in words
+    ):
+        return "Modrinth App"
     return None
 
 

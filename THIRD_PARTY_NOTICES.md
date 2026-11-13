@@ -13,6 +13,18 @@ locations given.
 - License: Apache License, Version 2.0 (see [LICENSE](LICENSE))
 - Source: https://github.com/gradle/gradle
 
+### Renderer lab JSON parser
+
+The experimental native renderer adapters vendor nlohmann/json v3.12.0,
+copyright Niels Lohmann and contributors, under the MIT license.
+Source: https://github.com/nlohmann/json/tree/v3.12.0
+The unmodified header is in `native/renderer-lab/third_party/nlohmann/json.hpp`;
+the license is in [native/renderer-lab/licenses/nlohmann-json-LICENSE.MIT](native/renderer-lab/licenses/nlohmann-json-LICENSE.MIT).
+Imported renderer SDK implementations remain in ignored, pinned dependency
+checkouts and retain their own notices and terms. See
+[native/renderer-lab/DEPENDENCIES.md](native/renderer-lab/DEPENDENCIES.md) and
+[native/renderer-experiments/README.md](native/renderer-experiments/README.md).
+
 ## Forge Java dependency
 
 The Forge 1.12.2 JAR bundles JOML 1.10.5, copyright JOML contributors,

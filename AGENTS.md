@@ -54,18 +54,35 @@ overrides.
 .\gradlew.bat package -Parch=win64
 ```
 
-`tools\rtx.bat launch` builds the mod, installs it into a checkout-specific
-Prism Launcher instance, and starts Minecraft through Prism. Installed Prism
+With unchanged configuration, `tools\rtx.bat launch` builds the mod, installs it
+into a checkout-specific Prism Launcher instance, and starts Minecraft through
+Prism. Installed Prism
 reuses its normal account profile; portable Prism keeps its profile under
 `run-prism/`. Use `tools\rtx.bat prism signin` with a Microsoft account that
 owns Minecraft: Java Edition. See
 [Getting Started](docs/GETTING_STARTED.md#sign-in-to-prism).
+
+This workspace's automated renderer experiments use the opt-in Modrinth adapter:
+set `launch.launcher` to `modrinth` in ignored `tools/config.local.json` and
+explicitly adopt a separate instance displayed as `RTX Rewrite Bench`. Follow
+[Modrinth Renderer Lab](tools/docs/MODRINTH_RENDERER_LAB.md). The adapter uses
+read-only app metadata and a supported launch deep link, never edits the app
+database, and rejects the source gameplay profile. Modrinth's singleton cannot
+inherit per-request JVM arguments or environment variables; configure persistent
+arguments in the duplicate and verify the new game's actual command line.
 
 For development in an existing Modrinth profile, use the root `dev.ps1` helper
 and [Modrinth Development](docs/MODRINTH_DEVELOPMENT.md). It builds, tests,
 packages, or deploys a lightweight JAR with verified backups; launch the profile
 through Modrinth after deployment. Machine-local logs and backups stay under
 ignored `.codex/`.
+
+Experimental SDK builds are separate from Gradle and release packaging. See
+[Renderer Experiments](native/renderer-experiments/README.md) for pinned imports,
+ScenePacket captures and build commands. Standalone SDK timings exclude live
+Minecraft transfer and presentation. The in-process `native-hybrid` host is a
+prototype with `qualityComparable=false`; neither its activation nor a compiled
+SDK establishes visual parity or a 3-4x real-FPS improvement.
 
 `classes` depends on `setupRuntime`, which compiles the JNI bridge, fetches a
 missing runtime, and stages it along with `rtx.conf`, the Packman runtime
@@ -147,6 +164,17 @@ lights over raw `long` handles from the JNI wrapper. `JoinBurstHold` keeps
 vanilla's terrain-download screen up for a bounded wait for stable frames after
 a world join, hiding first-sight mesh, pipeline, and BLAS costs without holding
 the screen indefinitely.
+
+**Experimental backends.** `RendererBackendSelection` keeps `remix` as the
+default. `scene-export` records retained scene data while Remix still renders.
+`native-hybrid` can run the separately built RTXPT Intro step 8 host in process:
+DX12 renders offscreen, shared color/depth feed Minecraft's SDL/OpenGL window,
+and Java keeps capture, lens, weather and HUD. Its status becomes active only
+after a real frame and shared-target import succeed. Geometry/material changes
+currently reload the SDK scene, and material/refraction/SSS, conf-layer,
+area-light and sky semantics remain incomplete or unreviewed. `restir-pt`,
+`gi12` and `voxel` currently have standalone adapters; selecting those names
+does not make them in-process renderers. Voxel tracing has no triangle fallback.
 
 **Sky.** `SkyRenderer` branches on the dimension's sky type: the End keeps a
 constant dark dome and a skyless dimension a black one with no sky ambient. In
@@ -640,8 +668,16 @@ diluting the sampler's candidate pool.
   (`CloudField`, `VolumetricCloudGenerator`, `LensEffects`).
 - Anything drawn after the lens reads the main target, never the runtime's raw
   image, or it undoes the lens where it draws (`RemixWeatherRenderer`).
-- The developer tools launch only through a signed-in Prism; they never pass
-  Prism's `--offline` or launch `runClient` (`test_public_boundary.py`).
+- Developer launches use the configured app's signed-in account. Prism remains
+  the upstream default; Modrinth automation requires an explicitly adopted
+  isolated duplicate. Never target the source gameplay profile, write account
+  tokens, use Prism's `--offline`, or launch `runClient` through the tools.
+- Benchmark cleanup may stop only retained process objects from this controller's
+  own launches, never Java/capture images machine-wide or the Modrinth singleton.
+- A requested backend is not implementation proof. Use the latest
+  `RTX_BACKEND_STATUS`; native presentation alone cannot override
+  `qualityComparable=false`, unsupported features or frame generation. Keep
+  standalone diagnostics separate from end-to-end Minecraft results.
 
 ## Focused Engineering Guides
 
@@ -651,6 +687,9 @@ diluting the sampler's candidate pool.
   JVM argument ownership. Named source classes own the defaults.
 - [Benchmarking](tools/docs/BENCHMARKING.md) and
   [Profiling](tools/docs/PROFILING.md): counter interpretation and measurement.
+- [Modrinth Renderer Lab](tools/docs/MODRINTH_RENDERER_LAB.md) and
+  [Renderer Experiments](native/renderer-experiments/README.md): isolated app
+  profiles, frozen fixtures, native SDK imports and evidence boundaries.
 - [Getting Started](docs/GETTING_STARTED.md): runtime staging, initialization
   failures, debug views, and worktree setup. Debug-view indices belong to the
   matching dxvk-remix source, not this repository.
